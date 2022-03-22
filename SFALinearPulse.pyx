@@ -96,16 +96,16 @@ cdef class SFALinearPulse:
     #memeber variables like in C++!
     cdef readonly double Ip, Up, rtUp, omega, CEP, AlignmentAngle, kappa, Z
     cdef readonly int N
-    cdef int OAM
+    cdef public int OAM
     cdef readonly str target
     #cdef object __weakref__ # enable weak referencing support
     
     def __init__(self, Ip_ = 0.5, Up_ = 0.44, omega_ = 0.057, N_ = 6, CEP_ = 0., target_="None", OAM_ = 1000, Z_=1):
-        '''
+        """
             Initialise field and target parameters defaults correspond to 800nm wl and 2 10^14 W/cm^2 intensity
             for the target 0=He, HeTheta=1, Ne=2, Ar=3, ArEx_4S=4, Xe=5, N2=6, N2Theta=7, O2Theta=8, H = 9 (and default case e.g. any other number)
             The ionization prefactor must be set independently
-        '''
+        """
         #Set pulse and targetvparameters
         self.Ip = Ip_
         self.Up = Up_
@@ -332,7 +332,7 @@ cdef class SFALinearPulse:
         cdef double complex spherical_harm
 
         if self.OAM == 1000:  # This is just the normal case - return the full spherical harmonic
-            spherical_harm = factor * sp.lpmn(m, l, cos_theta)[0][abs(m)][l] * np.exp(1j * m * phi)
+            spherical_harm = factor * sp.lpmn(m, l, cos_theta)[0][m][l] * np.exp(1j * m * phi)
         else:  # Here we have OAM selection - this kills the exponential!
             spherical_harm = factor * sp.lpmn(m, l, cos_theta)[0][abs(m)][l]
 
@@ -360,6 +360,10 @@ cdef class SFALinearPulse:
 
 
     cpdef double complex d_asymp_Er(self, double p, double theta, double phi, double complex ts, clm_array):
+        """
+        Prefactor for E*r for the asymptotic wave function
+        clm_array is the expansion coeffs. for the asymptotic wave function. 
+        """
         cdef double I2_p, I2_m, alpha_p, alpha_m, sn, theta_t, px, py, pz
         cdef double complex factor1, factor2, pz_t, p_t, I1
 
@@ -392,7 +396,7 @@ cdef class SFALinearPulse:
             for m in range(-l, l + 1):
                 # Get clm
                 sign = 0 if m >= 0 else 1
-                clm = clm_array[sign, l, m]
+                clm = clm_array[sign, l, abs(m)]
 
                 if np.abs(clm) == 0:  # Don't calculate if it's all 0...
                     continue
@@ -413,7 +417,11 @@ cdef class SFALinearPulse:
                 # Add the l,m contribution to d
                 d_res += clm * I1 * ((-1j) ** (l + 1) * alpha_p * I2_p * factor1 + (-1j) ** (l - 1) * alpha_m * I2_m * factor2)
 
-        return d_res
+        if self.OAM == 1000:  # OAM selection is not activated
+            return d_res
+        else:                 # OAM selection is activated - remember the i**OAM!
+            return d_res * (1j)**self.OAM
+
 
     cdef double complex di_gto(self, double p, double theta, double phi, double complex ts,
                                double front_factor, double alpha, int i, int j, int k,
@@ -424,12 +432,12 @@ cdef class SFALinearPulse:
         cdef double complex pz = p*cos_re(theta) + self.Af(ts)
 
         cdef double complex result = 2.**(-(i + j + k) - 3./2) * alpha**(-(i + j + k)/2. - 3./2) \
-                                     * exp(-1j*(px*x_a + py*y_a + pz*z_a)) \
+                                     * exp(-1j*(px*xa + py*ya + pz*za)) \
                                      * exp(-(px**2 + py**2 + pz**2)/(4.*alpha)) \
                                      * exp(-1.j*np.pi*(i + j + k)/2.)*self.Ef(ts) \
                                      * self.hermite_poly(i, px/(2.*sqrt_re(alpha))) \
                                      * self.hermite_poly(j, py/(2.*sqrt_re(alpha))) \
-                                     * (z_a*self.hermite_poly(k, pz/(2.*sqrt_re(alpha))) -
+                                     * (za*self.hermite_poly(k, pz/(2.*sqrt_re(alpha))) -
                                        1.j/(2.*sqrt_re(alpha))*self.hermite_poly(k + 1, pz/(2.*sqrt_re(alpha))))
         return front_factor * result
 
@@ -439,7 +447,7 @@ cdef class SFALinearPulse:
         cdef double complex result = 0
         cdef double x_a, y_a, z_a, alpha, front_factor
         cdef int i, j, k
-        cdef int N = coeffs.shape[0]
+        cdef int N = coefficients.shape[0]
         for n in range(N):
             front_factor, alpha, i, j, k, x_a, y_a, z_a = coefficients[n]
             result += self.di_gto(p, theta, phi, ts, front_factor, alpha, i, j, k, x_a, y_a, z_a)
