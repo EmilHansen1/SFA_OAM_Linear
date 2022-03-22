@@ -97,11 +97,12 @@ cdef class SFALinearPulse:
     '''
     #memeber variables like in C++!
     cdef readonly double Ip, Up, rtUp, omega, CEP, AlignmentAngle, kappa, Z
-    cdef readonly int N, \
+    cdef readonly int N
+    cdef int OAM
     cdef readonly str target
     #cdef object __weakref__ # enable weak referencing support
     
-    def __init__(self, Ip_ = 0.5, Up_ = 0.44, omega_ = 0.057, N_ = 6, CEP_ = 0., Z_=1, target_="None"):
+    def __init__(self, Ip_ = 0.5, Up_ = 0.44, omega_ = 0.057, N_ = 6, CEP_ = 0., target_="None", OAM_ = 1000, Z_=1):
         '''
             Initialise field and target parameters defaults correspond to 800nm wl and 2 10^14 W/cm^2 intensity
             for the target 0=He, HeTheta=1, Ne=2, Ar=3, ArEx_4S=4, Xe=5, N2=6, N2Theta=7, O2Theta=8, H = 9 (and default case e.g. any other number)
@@ -114,6 +115,7 @@ cdef class SFALinearPulse:
         self.omega = omega_
         self.kappa = np.sqrt(2*Ip_)
         self.Z = Z_
+        self.OAM = OAM_  # Standard value of 1000 means that no OAM is not used
 
         self.N = N_
         self.CEP = CEP_
@@ -309,10 +311,16 @@ cdef class SFALinearPulse:
     #-------- PREFACTORS and support functions ---------
     cpdef double complex sph_harm(self, int m, int l, double cos_theta, double phi):
         """
-        Special case of af 'spherical harmonic' where the Legendre function takes arguments abs(x) > 1
+        Special case of af 'spherical harmonic' where the Legendre function takes arguments abs(x) > 1. 
+        If OAM is given, 
         """
         cdef double factor = np.sqrt((2.*l+1.) / (4.*np.pi) * np.math.factorial(l-abs(m)) / np.math.factorial(l+abs(m)))
-        cdef double complex spherical_harm = factor * sp.lpmn(m, l, cos_theta)[0][abs(m)][l] * np.exp(1j * m * phi)
+        cdef double complex spherical_harm
+
+        if self.OAM == 1000:  # This is just the normal case - return the full spherical harmonic
+            spherical_harm = factor * sp.lpmn(m, l, cos_theta)[0][abs(m)][l] * np.exp(1j * m * phi)
+        else:  # Here we have OAM selection - this kills the exponential!
+            spherical_harm = factor * sp.lpmn(m, l, cos_theta)[0][abs(m)][l]
 
         if m >= 0:
             return spherical_harm
@@ -371,6 +379,12 @@ cdef class SFALinearPulse:
                 # Get clm
                 sign = 0 if m >= 0 else 1
                 clm = clm_array[sign, l, m]
+
+                if np.abs(clm) == 0:  # Don't calculate if it's all 0...
+                    continue
+                if self.OAM != 1000:  # Possibility for OAM selection - only takes the ones with matching m
+                    if m != self.OAM:
+                        continue
 
                 # Factors from recursion of spherical harmonics:
                 alpha_p = np.sqrt((l - m + 1) * (l + m + 1) / ((2 * l + 1) * (2 * l + 3)))
@@ -436,16 +450,16 @@ cdef class SFALinearPulse:
         return np.array([s.Mxy(px, py, pz, tf, state_array) for px, py in zip(pxList, pyList)])
 
 
-    def Mxz_List(s, pxList, double py, pzList, tf = np.inf, state_array=None):
+    def Mxz_List(s, pxList, double py, pzList, state_array=None, tf = np.inf):
         return np.array([s.Mxy(px, py, pz, tf, state_array) for px, pz in zip(pxList, pzList)])
 
 
     ####   ---   OAM Functions   ---   #### 
     cpdef Ml(s, double p, double theta, int Nphi = 250):
-        '''
-            This is the fourier series coeiffint of M to get the OAM distribusion.
-            It is computed taking advantage of the FFT
-        '''
+        """
+        This is the fourier series coeiffint of M to get the OAM distribusion.
+        It is computed taking advantage of the FFT
+        """
         phiList = np.linspace(-Pi, Pi, Nphi)
         MphiList = [s.M(p, theta, phi) for phi in phiList]
         return np.fft.fft(MphiList)/Nphi
@@ -458,9 +472,9 @@ cdef class SFALinearPulse:
 
 
     cpdef Mlxz(s, px, pz, int Nphi = 250):
-        '''
+        """
         convert Ml to cartesian coordinates, note px is the perpendicular coordinate st. px^2 = px^2+py^2
-        '''
+        """
         cdef double p = sqrt_re(px*px +pz*pz)
         cdef double theta = acos_re(pz/p)
         return s.Ml(p, theta, Nphi)
@@ -471,6 +485,7 @@ cdef class SFALinearPulse:
         return np.array([[abs(M)**2 for M in s.Mlxz(px, pz, Nphi)] for px, pz in zip(pxList, pzList)])
 
 
+'''
     #### ----- Different transtion amplitudes we calculated -------
     cpdef double complex I1_factor(self, double p, double theta, double phi, double complex ts):
         """
@@ -550,16 +565,15 @@ cdef class SFALinearPulse:
     def M_asymp_xz_list(self, pxList, py, pzList, clm_array):
         return np.array([self.M_asymp_xy(px, py, pz, clm_array) for px, pz in zip(pxList, pzList)])
 
-
     #####   ---   code for spectra
     cpdef double Spectra(s, double E, double phi = 0., double t = np.inf, double err = 1.0e-4, int limit = 500):
-        '''Function for the spectra'''    
+        """Function for the spectra"""  
         Norm_val, Norm_error = it.quad(s.Spec_Norm, 0, Pi, args = (phi, E, t), epsabs=err, epsrel=err, limit=limit  )    
         return Norm_val
      
     #Spectra Norm integrand
     cpdef double Spec_Norm(s, double theta, double phi, double E, double t = np.inf):
-        '''Function to compute the integrand of the theta integral for the 'spectra'''
+        """Function to compute the integrand of the theta integral for the 'spectra"""
         #phrased in spherical coordinates
         #cdef double complex M, Mg
         cdef double px, pr
@@ -567,6 +581,8 @@ cdef class SFALinearPulse:
         px = pr*sin_re(theta)
         
         return abs(s.M(pr, theta, phi, t))**2 *px * 2*Pi
+
+'''
 
 ######   ---   Funcitons for the analytic monochromatic approximation to pulse   ---   #####
 # ### This will no longer work as this was written for a circular field
