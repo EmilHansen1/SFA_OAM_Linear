@@ -89,8 +89,6 @@ cdef cot_c(dbl_or_cmplx t):
         return cos_c(t)/sin_c(t)
 
 
-
-
 cdef class SFALinearPulse:
     '''
         Class to compute the transition amplitude M(p) and its dervative M_g(p) using the SFA and saddle point approximation
@@ -122,8 +120,24 @@ cdef class SFALinearPulse:
         
         self.AlignmentAngle = 0.
         self.target = target_
-    
-        
+
+    cdef double complex hermite_poly(self, int n, double complex z):
+        if n == 0:
+            return 1.
+        elif n == 1:
+            return 2. * z
+        elif n == 2:
+            return 4. * z ** 2 - 2.
+        elif n == 3:
+            return 8 * z ** 3 - 12. * z
+        elif n == 4:
+            return 16. * z ** 4 - 48. * z ** 2 + 12.
+        elif n == 5:
+            return 32. * z ** 5 - 160. * z ** 3 + 120. * z
+        else:
+            print('Too high n: not implemented')
+            return 0.0
+
     #@functools.lru_cache(maxsize=cacheSize)
     cdef dbl_or_cmplx F(s, dbl_or_cmplx t):
         '''
@@ -401,13 +415,43 @@ cdef class SFALinearPulse:
 
         return d_res
 
+    cdef double complex di_gto(self, double p, double theta, double phi, double complex ts,
+                               double front_factor, double alpha, int i, int j, int k,
+                               double xa, double ya, double za):
+        """ Bound state prefactor d(p,t)=<p+A|H|0> in the LG using LCAO and GTOs from GAMESS coefficients """
+        cdef double px = p*sin_re(theta) * cos_re(phi)
+        cdef double py = p*sin_re(theta) * sin_re(phi)
+        cdef double complex pz = p*cos_re(theta) + self.Af(ts)
+
+        cdef double complex result = 2.**(-(i + j + k) - 3./2) * alpha**(-(i + j + k)/2. - 3./2) \
+                                     * exp(-1j*(px*x_a + py*y_a + pz*z_a)) \
+                                     * exp(-(px**2 + py**2 + pz**2)/(4.*alpha)) \
+                                     * exp(-1.j*np.pi*(i + j + k)/2.)*self.Ef(ts) \
+                                     * self.hermite_poly(i, px/(2.*sqrt_re(alpha))) \
+                                     * self.hermite_poly(j, py/(2.*sqrt_re(alpha))) \
+                                     * (z_a*self.hermite_poly(k, pz/(2.*sqrt_re(alpha))) -
+                                       1.j/(2.*sqrt_re(alpha))*self.hermite_poly(k + 1, pz/(2.*sqrt_re(alpha))))
+        return front_factor * result
+
+
+    cpdef double complex d_gto(self, double p, double theta, double phi, double complex ts, coefficients):
+        """ Total GTO prefactor from GAMESS coefficients """
+        cdef double complex result = 0
+        cdef double x_a, y_a, z_a, alpha, front_factor
+        cdef int i, j, k
+        cdef int N = coeffs.shape[0]
+        for n in range(N):
+            front_factor, alpha, i, j, k, x_a, y_a, z_a = coefficients[n]
+            result += self.di_gto(p, theta, phi, ts, front_factor, alpha, i, j, k, x_a, y_a, z_a)
+        return result
+
 
     cpdef double complex d0(self, double p, double theta, double phi, double complex ts, state_array=None):
         """
         Function to select the right prefactor based on self.target 
         """
         if self.target == "GTO":
-            return 1
+            return self.d_gto(p, theta, phi, ts, state_array)
         elif self.target == 'asymp':
             return self.d_asymp_Er(p, theta, phi, ts, state_array)
         else:
