@@ -97,10 +97,11 @@ cdef class SFALinearPulse:
     '''
     #memeber variables like in C++!
     cdef readonly double Ip, Up, rtUp, omega, CEP, AlignmentAngle, kappa, Z
-    cdef readonly int N, Target
+    cdef readonly int N, \
+    cdef readonly str target
     #cdef object __weakref__ # enable weak referencing support
     
-    def __init__(self, Ip_ = 0.5, Up_ = 0.44, omega_ = 0.057, N_ = 6, CEP_ = 0., Z_=1, Target_=3.):
+    def __init__(self, Ip_ = 0.5, Up_ = 0.44, omega_ = 0.057, N_ = 6, CEP_ = 0., Z_=1, target_="None"):
         '''
             Initialise field and target parameters defaults correspond to 800nm wl and 2 10^14 W/cm^2 intensity
             for the target 0=He, HeTheta=1, Ne=2, Ar=3, ArEx_4S=4, Xe=5, N2=6, N2Theta=7, O2Theta=8, H = 9 (and default case e.g. any other number)
@@ -118,7 +119,7 @@ cdef class SFALinearPulse:
         self.CEP = CEP_
         
         self.AlignmentAngle = 0.
-        self.Target = Target_
+        self.target = target_
     
         
     #@functools.lru_cache(maxsize=cacheSize)
@@ -304,21 +305,105 @@ cdef class SFALinearPulse:
         '''Second order derivative of action wrt t'''
         return -(p*cos_re(theta)+s.Af(t))*s.Ef(t)
 
-    
-# prefactor keep for future implementation    
-#     #@functools.lru_cache(maxsize=cacheSize)
-    cdef double complex d0(s, double p, double theta, double phi, double complex ts):
-        '''
-            Bound state prefactor will use GAMESS style gaussain orbitals'
-        '''
-        #Dummy prefactor changes this!
-        return 1.
+
+    #-------- PREFACTORS and support functions ---------
+    cpdef double complex sph_harm(self, int m, int l, double cos_theta, double phi):
+        """
+        Special case of af 'spherical harmonic' where the Legendre function takes arguments abs(x) > 1
+        """
+        cdef double factor = np.sqrt((2.*l+1.) / (4.*np.pi) * np.math.factorial(l-abs(m)) / np.math.factorial(l+abs(m)))
+        cdef double complex spherical_harm = factor * sp.lpmn(m, l, cos_theta)[0][abs(m)][l] * np.exp(1j * m * phi)
+
+        if m >= 0:
+            return spherical_harm
+        else:
+            return (-1)**abs(m) * np.conj(spherical_harm)
+
+
+    cpdef double I2_factor(self, int l):
+        """
+        Factor needed to calculate the transition amplitude for an asymptotic WF in the LG 
+        """
+        cdef double nu = self.Z / self.kappa
+        cdef double factor = self.kappa ** (nu + 3. / 2.) * gamma(l + nu + 3.) / gamma(l + 3. / 2.) * (
+                    2. * self.kappa) ** (-l - 1.) * 2. ** (-nu - 2.)
+
+        # Determine the hypergeometric function in the saddle points (z=1 always):
+        cdef double a = 0.5 * (l - nu - 1.)
+        cdef double b = 0.5 * (l - nu)
+        cdef double c = l + 3. / 2.
+        cdef double hyper_geo = gamma(c) * gamma(c - a - b) / (gamma(c - a) * gamma(c - b))
+
+        return hyper_geo * factor
+
+
+    cpdef double complex d_asymp_Er(self, double p, double theta, double phi, double complex ts, clm_array):
+        cdef double I2_p, I2_m, alpha_p, alpha_m, sn, theta_t, px, py, pz
+        cdef double complex factor1, factor2, pz_t, p_t, I1
+
+        # Values needed
+        cdef double complex d_res = 0.
+        cdef double complex ddS = self.DDS(p, theta, 0., ts)
+        cdef double nu = self.Z / self.kappa - 2.
+        cdef int max_l = clm_array.shape[1]
+
+        # Find the coordinates
+        px = p * sin_re(theta) * cos_re(phi)
+        py = p * sin_re(theta) * sin_re(phi)
+        pz = p * cos_re(theta)
+
+        sn = 1. if self.Af(ts).imag > 0 else -1.
+        pz_t = 1j * sn * sqrt_re(2 * self.Ip + px ** 2 + py ** 2)  # pz+s.Af(ts) #tilde{pz}
+        p_t = 1j * sqrt_re(2 * self.Ip)  # sqrt(px**2+py**2+pz_2**2) # =modulus{tilde{p}}
+        cos_theta_t = np.imag(pz_t) / np.imag(p_t)  # pz_t and p_t are both imaginary in saddle points
+
+        # Find terms dependent on ts (through ddS)
+        I1 = ddS ** (-nu) * 1j ** (nu / 2.) * gamma(nu / 2.) / (2. * gamma(nu)) * (2. * ddS) ** (nu / 2.)
+            # * np.sqrt(2. * np.pi * 1j / ddS) * np.exp(1j * self.S(p, theta, phi, ts))
+
+        # Now loop over the contributions from the Clm's
+        for l in range(0, max_l):
+            # Find stuff not dependent on m:
+            I2_p = self.I2_factor(l + 1)
+            I2_m = self.I2_factor(l - 1)
+
+            for m in range(-l, l + 1):
+                # Get clm
+                sign = 0 if m >= 0 else 1
+                clm = clm_array[sign, l, m]
+
+                # Factors from recursion of spherical harmonics:
+                alpha_p = np.sqrt((l - m + 1) * (l + m + 1) / ((2 * l + 1) * (2 * l + 3)))
+                alpha_m = np.sqrt((l - m) * (l + m) / (2 * l - 1) * (2 * l + 1))
+
+                # Now add the saddle point dependent terms together
+                factor1 = p_t ** (l + 1) * self.sph_harm(m, l + 1, cos_theta_t, phi)
+
+                if alpha_m != 0:  # If alpha_m is zero the recursion has killed the sph_harm (that is l < abs(m))
+                    factor2 = p_t ** (l - 1) * self.sph_harm(m, l - 1, cos_theta_t, phi)
+
+                # Add the l,m contribution to d
+                d_res += clm * I1 * ((-1j) ** (l + 1) * alpha_p * I2_p * factor1 + (-1j) ** (l - 1) * alpha_m * I2_m * factor2)
+
+        return d_res
+
+
+    cpdef double complex d0(self, double p, double theta, double phi, double complex ts, state_array=None):
+        """
+        Function to select the right prefactor based on self.target 
+        """
+        if self.target == "GTO":
+            return 1
+        elif self.target == 'asymp':
+            return self.d_asymp_Er(p, theta, phi, ts, state_array)
+        else:
+            return 1.
 
     
     @cython.boundscheck(False) # turn off bounds-checking for entire function  
     @cython.wraparound(False)  # turn off negative index wrapping for entire function
     #@functools.lru_cache(maxsize=cacheSize)
-    cpdef double complex M(s, double p, double theta, double phi, double tf = np.inf):#double pz, double px, double t, int N, int eLim):
+    cpdef double complex M(s, double p, double theta, double phi, double tf = np.inf, state_array=None):  # double pz, double px, double t, int N, int eLim):
         '''
             Final transition amplitude
             Constructed as sum 
@@ -331,28 +416,28 @@ cdef class SFALinearPulse:
             if(real(ts)<tf):
                 det = sqrt(2*Pi*I1/s.DDS(p, theta, phi, ts))
                 expS = exp(I1*s.S(p, theta, phi, ts))
-                d0 = s.d0(p, theta, phi, ts)
+                d0 = s.d0(p, theta, phi, ts, state_array)
                 MSum += d0*det*expS
         return MSum
 
 
     # Transition amplitude in cartesian co-ordinates
-    cpdef double complex Mxy(s, px, py, pz, tf = np.inf):
+    cpdef double complex Mxy(s, px, py, pz, tf = np.inf, state_array=None):
         cdef double p = sqrt_re(px*px + py*py +pz*pz)
         cdef double theta = acos_re(pz/p)
         cdef double phi = atan2_re(py, px)
-        return s.M(p, theta, phi, tf)
+        return s.M(p, theta, phi, tf, state_array)
 
 
     # List comprehension over cartesian transition amplitude
     @cython.boundscheck(False) # turn off bounds-checking for entire function
     @cython.wraparound(False)  # turn off negative index wrapping for entire function
-    def Mxy_List(s, pxList, pyList, double pz, tf = np.inf):
-        return np.array([s.Mxy(px, py, pz, tf) for px, py in zip(pxList, pyList)])
+    def Mxy_List(s, pxList, pyList, double pz, tf = np.inf, state_array=None):
+        return np.array([s.Mxy(px, py, pz, tf, state_array) for px, py in zip(pxList, pyList)])
 
 
-    def Mxz_List(s, pxList, double py, pzList, tf = np.inf):
-        return np.array([s.Mxy(px, py, pz, tf) for px, pz in zip(pxList, pzList)])
+    def Mxz_List(s, pxList, double py, pzList, tf = np.inf, state_array=None):
+        return np.array([s.Mxy(px, py, pz, tf, state_array) for px, pz in zip(pxList, pzList)])
 
 
     ####   ---   OAM Functions   ---   #### 
@@ -397,30 +482,13 @@ cdef class SFALinearPulse:
                 2. * ddS) ** (nu / 2.) * np.exp(1j * self.S(p, theta, phi, ts))
 
 
-    cpdef double I2_factor(self, int l):
-        """
-        Factor needed to calculate the transition amplitude for an asymptotic WF in the LG 
-        """
-        cdef double nu = self.Z / self.kappa
-        cdef double factor = self.kappa ** (nu + 3./2.) * gamma(l + nu + 3.) / gamma(l + 3./2.) * (2. * self.kappa) ** (-l - 1.) * 2. ** (-nu - 2.)
-
-        # Determine the hypergeometric function in the saddle points (z=1 always):
-        cdef double a = 0.5 * (l - nu - 1.)
-        cdef double b = 0.5 * (l - nu)
-        cdef double c = l + 3./2.
-        cdef double hyper_geo = gamma(c) * gamma(c - a - b) / (gamma(c - a) * gamma(c - b))
-
-        return hyper_geo * factor
-
-
-    cpdef double complex M_asymp_Er(self, double p, double theta, double phi, clm_array):
+    cpdef M_asymp_Er(self, double p, double theta, double phi, clm_array):
         """
         Transition amplitude for E*r in length gauge for an asymptotic wave-function.
         """
-        print('Calculating M_asymp!')
         cdef double complex M_res = 0.
-        cdef double I2_p, I2_m, alpha_p, alpha_m, sn
-        cdef double complex sum1, sum2, pz_t, p_t, theta_t, I1
+        cdef double I2_p, I2_m, alpha_p, alpha_m, sn, theta_t
+        cdef double complex sum1, sum2, pz_t, p_t, I1
         cdef double px = p * sin_re(theta) * cos_re(phi), py = p * sin_re(theta) * sin_re(phi), pz = p * cos_re(theta)
 
         cdef int max_l = clm_array.shape[1]
@@ -447,28 +515,31 @@ cdef class SFALinearPulse:
                     sn = 1. if self.Af(ts).imag > 0 else -1.
                     pz_t = 1j * sn * sqrt_re(2 * self.Ip + px ** 2 + py ** 2)  #pz+s.Af(ts) #tilde{pz}
                     p_t = 1j * sqrt_re(2 * self.Ip)  #sqrt(px**2+py**2+pz_2**2) #=modulus{tilde{p}}
-                    theta_t = pz_t.imag / p_t.imag
+                    cos_theta_t = np.imag(pz_t)/np.imag(p_t)  # pz_t and p_t are both imaginary in saddle points
+
+                    #print(pz_t)
+                    #print(p_t)
+                    #print(np.imag(pz_t)/np.imag(p_t))
+                    #print(theta_t)
 
                     # Find the action related term
                     I1 = self.I1_factor(p, theta, phi, ts)
 
                     # Now add the saddle point dependent terms together
-                    sum1 += p_t ** (l + 1) * I1 * sp.sph_harm(m, l + 1, phi, theta_t)
+                    sum1 += p_t ** (l + 1) * I1 * self.sph_harm(m, l + 1, cos_theta_t, phi)
                     if alpha_m != 0:  # If alpha_m is zero the recursion has killed the sph_harm (that is l < abs(m))
-                        sum2 += p_t ** (l - 1) * I1 * sp.sph_harm(m, l - 1, phi, theta_t)
+                        sum2 += p_t ** (l - 1) * I1 * self.sph_harm(m, l - 1, cos_theta_t, phi)
 
                 # Add the l,m contribution to M
-                print(sum1, sum2)
                 M_res += clm * ((-1j) ** (l + 1) * alpha_p * I2_p * sum1 + (-1j) ** (l - 1) * alpha_m * I2_m * sum2)
 
         return M_res
 
 
-    cpdef double complex M_asymp_xy(self, px, py, pz, clm_array):
+    cpdef M_asymp_xy(self, double px, double py, double pz, clm_array):
         """
         The above transition amplitude in cartesian coordinates 
         """
-        print('Hello?')
         cdef double p = sqrt_re(px * px + py * py + pz * pz)
         cdef double theta = acos_re(pz / p)
         cdef double phi = atan2_re(py, px)
@@ -476,8 +547,7 @@ cdef class SFALinearPulse:
 
     @cython.boundscheck(False)  # turn off bounds-checking for entire function
     @cython.wraparound(False)
-    def M_asymp_xz_list(self, pxList, double py, pzList, clm_array):
-        print('Dafuk?')
+    def M_asymp_xz_list(self, pxList, py, pzList, clm_array):
         return np.array([self.M_asymp_xy(px, py, pz, clm_array) for px, pz in zip(pxList, pzList)])
 
 
