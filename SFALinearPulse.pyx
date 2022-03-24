@@ -16,7 +16,7 @@ cimport scipy.special.cython_special as csp
 import mpmath as mp
 import functools
 import multiprocessing
-import scipy.inegrate as si
+import scipy.integrate as it
 
 import numpy as np
 cimport numpy as np
@@ -469,16 +469,16 @@ cdef class SFALinearPulse:
             return 1.
 
 
-    cdef M_integrand(self, double t, double p, double theta, double phi, int cmplx):
+    cpdef double M_integrand(self, double t, double p, double theta, double phi, int cmplx):
         """
         The integrand of the time integral for numerical integration.
         Currently only the exponentiated action.
         """
-        cdef double complex Mi = np.exp(1j * self.S(p, theta, phi, t))
+        cpdef double complex Mi = exp(I1 * self.S(p, theta, phi, t))
         if cmplx:
-            return np.imag(Mi)
-        return np.real(Mi)
-
+            return Mi.imag
+        else:
+            return Mi.real
 
 
     @cython.boundscheck(False) # turn off bounds-checking for entire function  
@@ -491,20 +491,19 @@ cdef class SFALinearPulse:
         '''
         #eLim is 1 or 2, the number of orbits accounted for
         cdef double complex MSum = 0.
-
-        if s.num_int:
-            M_im = si.quadrature(s.M_integrand, 0, 2*s.N*Pi/s.omega, args=(p, theta, phi, 1))
-            M_re = si.quadrature(s.M_integrand, 0, 2*s.N*Pi/s.omega, args=(p, theta, phi, 0))
-            return M_re + 1j * M_im
-
-        times = s.TimesGen(p, theta, phi)
-        
-        for ts in times:
-            if(real(ts)<tf):
-                det = sqrt(2*Pi*I1/s.DDS(p, theta, phi, ts))
-                expS = exp(I1*s.S(p, theta, phi, ts))
-                d0 = s.d0(p, theta, phi, ts, state_array)
-                MSum += d0*det*expS
+        cdef double M_im, M_re, er1, er2
+        if s.num_int == 1:
+            M_im, er1 = it.quad(s.M_integrand, 0, 2*s.N*Pi/s.omega, args=(p, theta, phi, 1))
+            M_re, er2 = it.quad(s.M_integrand, 0, 2*s.N*Pi/s.omega, args=(p, theta, phi, 0))
+            MSum = M_re + I1*M_im
+        else:
+            times = s.TimesGen(p, theta, phi)
+            for ts in times:
+                if(real(ts)<tf):
+                    det = sqrt(2*Pi*I1/s.DDS(p, theta, phi, ts))
+                    expS = exp(I1*s.S(p, theta, phi, ts))
+                    d0 = s.d0(p, theta, phi, ts, state_array)
+                    MSum += d0*det*expS
         return MSum
 
 
