@@ -335,9 +335,9 @@ cdef class SFALinearPulse:
         cdef double complex spherical_harm
 
         if self.OAM == 1000:  # This is just the normal case - return the full spherical harmonic
-            spherical_harm = factor * sp.lpmn(m, l, cos_theta)[0][m][l] * np.exp(1j * m * phi)
+            spherical_harm = factor * sp.lpmn(abs(m), l, cos_theta)[0][abs(m)][l] * np.exp(1j * abs(m) * phi)
         else:  # Here we have OAM selection - this kills the exponential!
-            spherical_harm = factor * sp.lpmn(m, l, cos_theta)[0][abs(m)][l]
+            spherical_harm = factor * sp.lpmn(abs(m), l, cos_theta)[0][abs(m)][l]
 
         if m >= 0:
             return spherical_harm
@@ -491,6 +491,7 @@ cdef class SFALinearPulse:
         #eLim is 1 or 2, the number of orbits accounted for
         cdef double complex MSum = 0.
         cdef double M_im, M_re, er1, er2
+
         if s.num_int == 1:  # Numerical
             #M_im, er1 = it.quadrature(s.M_integrand, 0, 2 * s.N * Pi / s.omega, args=(p, theta, phi, 1))
             #M_re, er2 = it.quadrature(s.M_integrand, 0, 2 * s.N * Pi / s.omega, args=(p, theta, phi, 0))
@@ -500,6 +501,7 @@ cdef class SFALinearPulse:
             M_re, er2 = it.quad(s.M_integrand, 0, 2 * s.N * Pi / s.omega, args=(p, theta, phi, 0), limit=2500,
                                 epsabs=1.5e-15)
             MSum = M_re + I1*M_im
+
         else:  # SPA
             times = s.TimesGen(p, theta, phi)
             for ts in times:
