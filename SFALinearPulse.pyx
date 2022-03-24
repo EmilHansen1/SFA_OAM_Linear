@@ -492,11 +492,16 @@ cdef class SFALinearPulse:
         #eLim is 1 or 2, the number of orbits accounted for
         cdef double complex MSum = 0.
         cdef double M_im, M_re, er1, er2
-        if s.num_int == 1:
-            M_im, er1 = it.quad(s.M_integrand, 0, 2*s.N*Pi/s.omega, args=(p, theta, phi, 1))
-            M_re, er2 = it.quad(s.M_integrand, 0, 2*s.N*Pi/s.omega, args=(p, theta, phi, 0))
+        if s.num_int == 1:  # Numerical
+            #M_im, er1 = it.quadrature(s.M_integrand, 0, 2 * s.N * Pi / s.omega, args=(p, theta, phi, 1))
+            #M_re, er2 = it.quadrature(s.M_integrand, 0, 2 * s.N * Pi / s.omega, args=(p, theta, phi, 0))
+            #print(M_im)
+            M_im, er1 = it.quad(s.M_integrand, 0, 2 * s.N * Pi / s.omega, args=(p, theta, phi, 1), limit=2500,
+                                epsabs=1.5e-15)
+            M_re, er2 = it.quad(s.M_integrand, 0, 2 * s.N * Pi / s.omega, args=(p, theta, phi, 0), limit=2500,
+                                epsabs=1.5e-15)
             MSum = M_re + I1*M_im
-        else:
+        else:  # SPA
             times = s.TimesGen(p, theta, phi)
             for ts in times:
                 if(real(ts)<tf):
