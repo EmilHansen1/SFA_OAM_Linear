@@ -16,10 +16,12 @@ cimport scipy.special.cython_special as csp
 import mpmath as mp
 import functools
 import multiprocessing
+import scipy.integrate as it
 
 import numpy as np
 cimport numpy as np
 from numpy cimport ndarray
+
 
 cimport cython
 
@@ -95,12 +97,12 @@ cdef class SFALinearPulse:
     '''
     #memeber variables like in C++!
     cdef readonly double Ip, Up, rtUp, omega, CEP, AlignmentAngle, kappa, Z
-    cdef readonly int N
+    cdef readonly int N, num_int
     cdef public int OAM
     cdef readonly str target
     #cdef object __weakref__ # enable weak referencing support
     
-    def __init__(self, Ip_ = 0.5, Up_ = 0.44, omega_ = 0.057, N_ = 6, CEP_ = 0., target_="None", OAM_ = 1000, Z_=1):
+    def __init__(self, Ip_=0.5, Up_=0.44, omega_=0.057, N_=6, CEP_=0., target_="None", OAM_=1000, Z_=1, num_int_=0):
         """
             Initialise field and target parameters defaults correspond to 800nm wl and 2 10^14 W/cm^2 intensity
             for the target 0=He, HeTheta=1, Ne=2, Ar=3, ArEx_4S=4, Xe=5, N2=6, N2Theta=7, O2Theta=8, H = 9 (and default case e.g. any other number)
@@ -120,6 +122,7 @@ cdef class SFALinearPulse:
         
         self.AlignmentAngle = 0.
         self.target = target_
+        self.num_int = num_int_
 
     cdef double complex hermite_poly(self, int n, double complex z):
         if n == 0:
@@ -464,7 +467,19 @@ cdef class SFALinearPulse:
         else:
             return 1.
 
-    
+
+    cpdef double M_integrand(self, double t, double p, double theta, double phi, int cmplx):
+        """
+        The integrand of the time integral for numerical integration.
+        Currently only the exponentiated action.
+        """
+        cpdef double complex Mi = exp(I1 * self.S(p, theta, phi, t))
+        if cmplx:
+            return Mi.imag
+        else:
+            return Mi.real
+
+
     @cython.boundscheck(False) # turn off bounds-checking for entire function  
     @cython.wraparound(False)  # turn off negative index wrapping for entire function
     #@functools.lru_cache(maxsize=cacheSize)
@@ -475,14 +490,24 @@ cdef class SFALinearPulse:
         '''
         #eLim is 1 or 2, the number of orbits accounted for
         cdef double complex MSum = 0.
-        times = s.TimesGen(p, theta, phi)
-        
-        for ts in times:
-            if(real(ts)<tf):
-                det = sqrt(2*Pi*I1/s.DDS(p, theta, phi, ts))
-                expS = exp(I1*s.S(p, theta, phi, ts))
-                d0 = s.d0(p, theta, phi, ts, state_array)
-                MSum += d0*det*expS
+        cdef double M_im, M_re, er1, er2
+        if s.num_int == 1:  # Numerical
+            #M_im, er1 = it.quadrature(s.M_integrand, 0, 2 * s.N * Pi / s.omega, args=(p, theta, phi, 1))
+            #M_re, er2 = it.quadrature(s.M_integrand, 0, 2 * s.N * Pi / s.omega, args=(p, theta, phi, 0))
+            #print(M_im)
+            M_im, er1 = it.quad(s.M_integrand, 0, 2 * s.N * Pi / s.omega, args=(p, theta, phi, 1), limit=2500,
+                                epsabs=1.5e-15)
+            M_re, er2 = it.quad(s.M_integrand, 0, 2 * s.N * Pi / s.omega, args=(p, theta, phi, 0), limit=2500,
+                                epsabs=1.5e-15)
+            MSum = M_re + I1*M_im
+        else:  # SPA
+            times = s.TimesGen(p, theta, phi)
+            for ts in times:
+                if(real(ts)<tf):
+                    det = sqrt(2*Pi*I1/s.DDS(p, theta, phi, ts))
+                    expS = exp(I1*s.S(p, theta, phi, ts))
+                    d0 = s.d0(p, theta, phi, ts, state_array)
+                    MSum += d0*det*expS
         return MSum
 
 
