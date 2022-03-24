@@ -384,7 +384,7 @@ cdef class SFALinearPulse:
         cos_theta_t = np.imag(pz_t) / np.imag(p_t)  # pz_t and p_t are both imaginary in saddle points
 
         # Find terms dependent on ts (through ddS)
-        I1 = ddS ** (-nu) * 1j ** (nu / 2.) * gamma(nu / 2.) / (2. * gamma(nu)) * (2. * ddS) ** (nu / 2.)
+        I1 = 1j ** (nu / 2.) * gamma(nu / 2.) / (2. * gamma(nu)) * (2. * ddS) ** (nu / 2.) * ddS ** (-nu)
             # * np.sqrt(2. * np.pi * 1j / ddS) * np.exp(1j * self.S(p, theta, phi, ts))
 
         # Now loop over the contributions from the Clm's
@@ -411,7 +411,7 @@ cdef class SFALinearPulse:
                 # Now add the saddle point dependent terms together
                 factor1 = p_t ** (l + 1) * self.sph_harm(m, l + 1, cos_theta_t, phi)
 
-                if alpha_m != 0:  # If alpha_m is zero the recursion has killed the sph_harm (that is l < abs(m))
+                if not abs(m) == l:  # If alpha_m is zero the recursion has killed the sph_harm (that is l < abs(m))
                     factor2 = p_t ** (l - 1) * self.sph_harm(m, l - 1, cos_theta_t, phi)
 
                 # Add the l,m contribution to d
@@ -420,7 +420,7 @@ cdef class SFALinearPulse:
         if self.OAM == 1000:  # OAM selection is not activated
             return d_res
         else:                 # OAM selection is activated - remember the i**OAM!
-            return d_res * (1j)**self.OAM
+            return d_res * 1j**self.OAM
 
 
     cdef double complex di_gto(self, double p, double theta, double phi, double complex ts,
