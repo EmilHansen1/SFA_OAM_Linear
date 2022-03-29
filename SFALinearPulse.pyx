@@ -102,7 +102,7 @@ cdef class SFALinearPulse:
     cdef readonly str target
     #cdef object __weakref__ # enable weak referencing support
     
-    def __init__(self, Ip_=0.5, Up_=0.44, omega_=0.057, N_=6, CEP_=0., target_="None", OAM_=1000, Z_=1, num_int_=0):
+    def __init__(self, Ip_=0.5, Up_=0.44, omega_=0.057, N_=6, CEP_=0., target_="None", OAM_=1000, Z_=1):
         """
             Initialise field and target parameters defaults correspond to 800nm wl and 2 10^14 W/cm^2 intensity
             for the target 0=He, HeTheta=1, Ne=2, Ar=3, ArEx_4S=4, Xe=5, N2=6, N2Theta=7, O2Theta=8, H = 9 (and default case e.g. any other number)
@@ -122,24 +122,7 @@ cdef class SFALinearPulse:
         
         self.AlignmentAngle = 0.
         self.target = target_
-        self.num_int = num_int_
 
-    cdef double complex hermite_poly(self, int n, double complex z):
-        if n == 0:
-            return 1.
-        elif n == 1:
-            return 2. * z
-        elif n == 2:
-            return 4. * z ** 2 - 2.
-        elif n == 3:
-            return 8 * z ** 3 - 12. * z
-        elif n == 4:
-            return 16. * z ** 4 - 48. * z ** 2 + 12.
-        elif n == 5:
-            return 32. * z ** 5 - 160. * z ** 3 + 120. * z
-        else:
-            print('Too high n: not implemented')
-            return 0.0
 
     #@functools.lru_cache(maxsize=cacheSize)
     cdef dbl_or_cmplx F(s, dbl_or_cmplx t):
@@ -237,7 +220,7 @@ cdef class SFALinearPulse:
     #@functools.lru_cache(maxsize=cacheSize)    
     cpdef dbl_or_cmplx S(s, double p, double theta, double phi, dbl_or_cmplx t):
         '''
-            Action as given by the SFA for a Pulse
+        Action as given by the SFA for a Pulse
         '''
         cdef dbl_or_cmplx tTerms = (s.Ip + 0.5*p*p)*t
         cdef dbl_or_cmplx linAI = p*cos_re(theta)*s.AfI(t)
@@ -425,7 +408,25 @@ cdef class SFALinearPulse:
             return d_res * 1j**self.OAM
 
 
-    cdef double complex di_gto(self, double p, double theta, double phi, double complex ts,
+    cpdef dbl_or_cmplx hermite_poly(self, int n, dbl_or_cmplx z):
+        if n == 0:
+            return 1.
+        elif n == 1:
+            return 2. * z
+        elif n == 2:
+            return 4. * z ** 2 - 2.
+        elif n == 3:
+            return 8 * z ** 3 - 12. * z
+        elif n == 4:
+            return 16. * z ** 4 - 48. * z ** 2 + 12.
+        elif n == 5:
+            return 32. * z ** 5 - 160. * z ** 3 + 120. * z
+        else:
+            print('Too high n: not implemented')
+            return 0.0
+
+
+    cpdef double complex di_gto(self, double p, double theta, double phi, dbl_or_cmplx ts,
                                double front_factor, double alpha, int i, int j, int k,
                                double xa, double ya, double za):
         """ Bound state prefactor d(p,t)=<p+A|H|0> in the LG using LCAO and GTOs from GAMESS coefficients """
@@ -434,9 +435,9 @@ cdef class SFALinearPulse:
         cdef double complex pz = p*cos_re(theta) + self.Af(ts)
 
         cdef double complex result = 2.**(-(i + j + k) - 3./2) * alpha**(-(i + j + k)/2. - 3./2) \
-                                     * exp(-1j*(px*xa + py*ya + pz*za)) \
-                                     * exp(-(px**2 + py**2 + pz**2)/(4.*alpha)) \
-                                     * exp(-1.j*np.pi*(i + j + k)/2.)*self.Ef(ts) \
+                                     * np.exp(-1j*(px*xa + py*ya + pz*za)) \
+                                     * np.exp(-(px**2 + py**2 + pz**2)/(4.*alpha)) \
+                                     * np.exp(-1.j*np.pi*(i + j + k)/2.)*self.Ef(ts) \
                                      * self.hermite_poly(i, px/(2.*sqrt_re(alpha))) \
                                      * self.hermite_poly(j, py/(2.*sqrt_re(alpha))) \
                                      * (za*self.hermite_poly(k, pz/(2.*sqrt_re(alpha))) -
@@ -444,14 +445,14 @@ cdef class SFALinearPulse:
         return front_factor * result
 
 
-    cpdef double complex d_gto(self, double p, double theta, double phi, double complex ts, coefficients):
+    cpdef double complex d_gto(self, double p, double theta, double phi, dbl_or_cmplx ts, coefficients):
         """ Total GTO prefactor from GAMESS coefficients """
-        cdef double complex result = 0
+        cdef double complex result = 0.
         cdef double x_a, y_a, z_a, alpha, front_factor
         cdef int i, j, k
-        cdef int N = coefficients.shape[0]
-        for n in range(N):
-            front_factor, alpha, i, j, k, x_a, y_a, z_a = coefficients[n]
+
+        for row in coefficients:
+            front_factor, alpha, i, j, k, x_a, y_a, z_a = row
             result += self.di_gto(p, theta, phi, ts, front_factor, alpha, i, j, k, x_a, y_a, z_a)
         return result
 
@@ -468,48 +469,23 @@ cdef class SFALinearPulse:
             return 1.
 
 
-    cpdef double M_integrand(self, double t, double p, double theta, double phi, int cmplx):
-        """
-        The integrand of the time integral for numerical integration.
-        Currently only the exponentiated action.
-        """
-        cpdef double complex Mi = exp(I1 * self.S(p, theta, phi, t))
-        if cmplx:
-            return Mi.imag
-        else:
-            return Mi.real
-
-
     @cython.boundscheck(False) # turn off bounds-checking for entire function  
     @cython.wraparound(False)  # turn off negative index wrapping for entire function
     #@functools.lru_cache(maxsize=cacheSize)
     cpdef double complex M(s, double p, double theta, double phi, double tf = np.inf, state_array=None):  # double pz, double px, double t, int N, int eLim):
         '''
-            Final transition amplitude
-            Constructed as sum 
+        Final transition amplitude
+        Constructed as sum 
         '''
-        #eLim is 1 or 2, the number of orbits accounted for
         cdef double complex MSum = 0.
-        cdef double M_im, M_re, er1, er2
 
-        if s.num_int == 1:  # Numerical
-            #M_im, er1 = it.quadrature(s.M_integrand, 0, 2 * s.N * Pi / s.omega, args=(p, theta, phi, 1))
-            #M_re, er2 = it.quadrature(s.M_integrand, 0, 2 * s.N * Pi / s.omega, args=(p, theta, phi, 0))
-            #print(M_im)
-            M_im, er1 = it.quad(s.M_integrand, 0, 2 * s.N * Pi / s.omega, args=(p, theta, phi, 1), limit=2500,
-                                epsabs=1.5e-15)
-            M_re, er2 = it.quad(s.M_integrand, 0, 2 * s.N * Pi / s.omega, args=(p, theta, phi, 0), limit=2500,
-                                epsabs=1.5e-15)
-            MSum = M_re + I1*M_im
-
-        else:  # SPA
-            times = s.TimesGen(p, theta, phi)
-            for ts in times:
-                if(real(ts)<tf):
-                    det = sqrt(2*Pi*I1/s.DDS(p, theta, phi, ts))
-                    expS = exp(I1*s.S(p, theta, phi, ts))
-                    d0 = s.d0(p, theta, phi, ts, state_array)
-                    MSum += d0*det*expS
+        times = s.TimesGen(p, theta, phi)
+        for ts in times:
+            if(real(ts)<tf):
+                det = sqrt(2.*Pi*I1/s.DDS(p, theta, phi, ts))
+                expS = exp(I1*s.S(p, theta, phi, ts))
+                d0 = s.d0(p, theta, phi, ts, state_array)
+                MSum += d0*det*expS
         return MSum
 
 
@@ -532,7 +508,72 @@ cdef class SFALinearPulse:
         return np.array([s.Mxy(px, py, pz, tf, state_array) for px, pz in zip(pxList, pzList)])
 
 
-    ####   ---   OAM Functions   ---   #### 
+    ### Code for exact integration of the prefactor!
+    cpdef double complex d0_num(self, double p, double theta, double phi, double t, state_array=None):
+        """
+        Function to select the right prefactor based on self.target 
+        """
+        if self.target == "GTO":
+            return self.d_gto(p, theta, phi, t, state_array)
+        elif self.target == 'asymp':
+            return 1  # NOT implemented outside of saddle point approx!
+        else:
+            return 1.
+
+
+    cpdef double M_integrand(self, double t, double p, double theta, double phi, int cmplx, state_array=None):
+        """
+        The integrand of the time integral for numerical integration.
+        Currently only the exponentiated action.
+        """
+        cdef double complex prefactor = self.d0_num(p, theta, phi, t, state_array)
+        cdef double complex Mi = np.exp(I1 * self.S(p, theta, phi, t)) * prefactor
+
+        if cmplx == 1:
+            return np.imag(Mi)
+        else:
+            return np.real(Mi)
+
+
+    cpdef double complex M_num(s, double p, double theta, double phi, double tf = np.inf,
+                           state_array=None):
+        '''
+        Final transition amplitude computed numerically 
+        '''
+        cdef double M_im, M_re, er1, er2
+        cdef double complex bound1, bound2
+
+        bound1 = 1. / (1j * (s.Ip + 0.5 * p * p))
+        bound2 = np.exp(1j * s.N * Pi * (8 * s.Ip + 4 * p * p + 3 * s.Up) / (4 * s.omega)) / (
+                    1j * (s.Ip + 0.5 * p * p))
+
+        M_im = it.quad(s.M_integrand, 0, 2 * s.N * Pi / s.omega, args=(p, theta, phi, 1, state_array),
+                            limit=2500,
+                            epsabs=1.5e-8)[0]
+        M_re = it.quad(s.M_integrand, 0, 2 * s.N * Pi / s.omega, args=(p, theta, phi, 0, state_array),
+                            limit=2500,
+                            epsabs=1.5e-8)[0]
+        return M_re + 1j * M_im  #+ bound1 - bound2
+
+
+    # Transition amplitude in cartesian co-ordinates
+    cpdef double complex Mxy_num(s, px, py, pz, tf = np.inf, state_array=None):
+        cdef double p = sqrt_re(px*px + py*py +pz*pz)
+        cdef double theta = acos_re(pz/p)
+        cdef double phi = atan2_re(py, px)
+        return s.M_num(p, theta, phi, tf, state_array)
+
+
+    def Mxz_List_num(s, pxList, double py, pzList, state_array=None, tf = np.inf):
+        return np.array([s.Mxy_num(px, py, pz, tf, state_array) for px, pz in zip(pxList, pzList)])
+
+
+
+
+
+
+
+    ####   ---   OAM Functions   ---   ####
     cpdef Ml(s, double p, double theta, int Nphi = 250):
         """
         This is the fourier series coeiffint of M to get the OAM distribusion.
