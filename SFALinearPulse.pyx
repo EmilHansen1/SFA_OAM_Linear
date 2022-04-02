@@ -435,13 +435,13 @@ cdef class SFALinearPulse:
         cdef double complex pz = p*cos_re(theta) + self.Af(ts)
 
         cdef double complex result = 2.**(-(i + j + k) - 3./2) * alpha**(-(i + j + k)/2. - 3./2) \
-                                     * exp(-1j*(px*xa + py*ya + pz*za)) \
                                      * exp(-(px**2 + py**2 + pz**2)/(4.*alpha)) \
                                      * exp(-1.j*np.pi*(i + j + k)/2.)*self.Ef(ts) \
                                      * self.hermite_poly(i, px/(2.*sqrt_re(alpha))) \
                                      * self.hermite_poly(j, py/(2.*sqrt_re(alpha))) \
                                      * (za*self.hermite_poly(k, pz/(2.*sqrt_re(alpha))) -
                                        1.j/(2.*sqrt_re(alpha))*self.hermite_poly(k + 1, pz/(2.*sqrt_re(alpha))))
+        # * exp(-1j*(px*xa + py*ya + pz*za)) \
         return front_factor * result
 
 
