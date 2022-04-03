@@ -122,6 +122,16 @@ cdef class SFALinearPulse:
         
         self.AlignmentAngle = 0.
         self.target = target_
+        self.test_target()
+
+
+    def test_target(self):
+        """
+        Give a warning if wrong target is selected
+        """
+        target_list = ['hyd1s_analytic', 'GTO', 'asymp', 'asymp_martiny']
+        if not self.target == 'None' and self.target not in target_list:
+            print('Warning: The chosen target is not known! Will calculate with prefractor set to 1.')
 
 
     #@functools.lru_cache(maxsize=cacheSize)
@@ -133,7 +143,8 @@ cdef class SFALinearPulse:
         if(real(t)<0 or real(t)>2*s.N*Pi/s.omega):
             return 0
         return 2*s.rtUp *  sin_c(s.omega * t / (2*s.N))**2
-    
+
+
     #@functools.lru_cache(maxsize=cacheSize)
     cpdef dbl_or_cmplx Af(s, dbl_or_cmplx t):
         '''
@@ -408,6 +419,56 @@ cdef class SFALinearPulse:
             return d_res * 1j**self.OAM
 
 
+    cpdef double complex d_asymp_martiny(self, double p, double theta, double phi, double complex ts, clm_array):
+        """
+        This is the prefactor calculated in Martiny's phd (eq. 4.29), simplified using an identity for the 
+        gamma functions.
+        """
+        cdef double sn, theta_t, px, py, pz
+        cdef double complex factor1, factor2, pz_t, p_t
+        cdef double complex d_res = 0.
+
+        # Values needed
+        cdef double complex ddS = self.DDS(p, theta, 0., ts)
+        cdef double nu = self.Z / self.kappa
+        cdef int max_l = clm_array.shape[1]
+
+        # Find the coordinates
+        px = p * sin_re(theta) * cos_re(phi)
+        py = p * sin_re(theta) * sin_re(phi)
+        pz = p * cos_re(theta)
+        sn = 1. if self.Af(ts).imag > 0 else -1.
+        pz_t = 1j * sn * sqrt_re(2 * self.Ip + px ** 2 + py ** 2)  # pz+s.Af(ts) : tilde{pz}
+        p_t = 1j * sqrt_re(2 * self.Ip)  # sqrt(px**2+py**2+pz_2**2) : modulus{tilde{p}}
+        cos_theta_t = np.imag(pz_t) / np.imag(p_t)  # pz_t and p_t are both imaginary in saddle points
+
+        # Start calculating the prefactor itself! Everything not depending on l,m:
+        factor1 = gamma(nu/2.+1.)/sqrt_re(2*np.pi) * (1j*self.kappa)**nu * (2./1j * ddS)**(nu/2.) / ddS**nu
+                # * sqrt(2.*np.pi*1.j/ddS) * np.exp(1.j*self.S(p, theta, phi, ts))
+
+        # Everything depending on l,m:
+        for l in range(0, max_l):
+            factor2 = (p_t/(1.j*self.kappa))**l
+
+            for m in range(-l, l+1):
+                # Get clm
+                sign = 0 if m >= 0 else 1
+                clm = clm_array[sign, l, abs(m)]
+
+                if abs(clm) == 0:  # Don't calculate if it's zero anyway...
+                    continue
+                if self.OAM != 1000:  # Possibility for OAM selection - only calculate m values matching OAM
+                    if m != self. OAM:
+                        continue
+
+                d_res += factor2 * clm * self.sph_harm(m, l, cos_theta_t, phi)
+
+        if self.OAM == 1000:  # OAM selection is not activated
+            return d_res * factor1 * 1j
+        else:                 # OAM selection is activated - remember the i**OAM!
+            return d_res * factor1 * 1j * 1j**self.OAM
+
+
     cpdef dbl_or_cmplx hermite_poly(self, int n, dbl_or_cmplx z):
         if n == 0:
             return 1.
@@ -465,6 +526,8 @@ cdef class SFALinearPulse:
             return self.d_gto(p, theta, phi, ts, state_array)
         elif self.target == 'asymp':
             return self.d_asymp_Er(p, theta, phi, ts, state_array)
+        elif self.target == 'asymp_martiny':
+            return self.d_asymp_martiny(p, theta, phi, ts, state_array)
         else:
             return 1.
 
@@ -509,14 +572,65 @@ cdef class SFALinearPulse:
 
 
     ### Code for exact integration of the prefactor!
+    cpdef double complex d0_analytic_hyd1s(self, double p, double theta, double phi, double t):
+        """
+        Analytic transition amplitude for ground state of hydrogen, see eq. 75 + 76 in Milosevic review. 
+        ONLY works for numerical calculations, as divergent in saddle points! 
+        """
+        return 1./(sqrt_re(2.) * np.pi) / self.DS(p, theta, phi, t)
+
+
+    cpdef double complex asymp_transform(self, double p, double theta, double phi, double t, clm_array):
+        """
+        Fourier transform of the asymptotic wave function 
+        """
+        cdef double px, py, pz, p_t, pz_t
+        cdef double complex factor1, factor2
+        cdef double nu = self.Z / self.kappa
+        cdef double complex res = 0
+
+        # Coordinates
+        px = p * sin_re(theta) * cos_re(phi)
+        py = p * sin_re(theta) * sin_re(phi)
+        pz = p * cos_re(theta)
+        p_t = sqrt_re(px**2. + py**2. + (pz + self.Af(t))**2.)
+        pz_t = (pz + self.Af(t)) / p_t
+        theta_t = acos_re(pz_t)
+
+        # Factor without m,l
+        factor1 = self.kappa**nu * (self.kappa**2 + p_t**2)**(-nu-1)
+
+        # Factors with m,l
+        for l in range(0, clm_array.shape[1]):
+            factor2 = gamma(l+nu+2.)/gamma(l+3./2.) * (p_t/self.kappa)**l \
+                      * mp.hyp2f1(0.5*(l-nu), 0.5*(l-nu+1.), l+3./2., -p_t**2/self.kappa**2) * 2**(-l-0.5) * (-1.j)**l
+
+            for m in range(-l, l+1):
+                sign = 0 if m >= 0 else 1
+                clm = clm_array[sign, l, abs(m)]
+                res += clm * sp.sph_harm(m, l, phi, theta_t) * factor2
+
+        return res * factor1
+
+
+    cpdef double complex d0_asymp_martiny(self, double p, double theta, double phi, double t, clm_array):
+        """
+        Numerical version of prefactor from Martiny's thesis, found above
+        """
+        return self.asymp_transform(p, theta, phi, t, clm_array) \
+               * self.DS(p, theta, phi, t) * np.exp(1.j * self.S(p, theta, phi, t))
+
+
     cpdef double complex d0_num(self, double p, double theta, double phi, double t, state_array=None):
         """
         Function to select the right prefactor based on self.target 
         """
         if self.target == "GTO":
             return self.d_gto(p, theta, phi, t, state_array)
-        elif self.target == 'asymp':
-            return 1  # NOT implemented outside of saddle point approx!
+        elif self.target == 'asymp_martiny':
+            return self.d0_asymp_martiny(p, theta, phi, t, state_array)
+        elif self.target == 'hyd1s_analytic':
+            return self.d0_analytic_hyd1s(p, theta, phi, t)
         else:
             return 1.
 
@@ -543,17 +657,27 @@ cdef class SFALinearPulse:
         cdef double M_im, M_re, er1, er2
         cdef double complex bound1, bound2
 
-        bound1 = 1. / (1j * (s.Ip + 0.5 * p * p))
-        bound2 = np.exp(1j * s.N * Pi * (8 * s.Ip + 4 * p * p + 3 * s.Up) / (4 * s.omega)) / (
-                    1j * (s.Ip + 0.5 * p * p))
+        #bound1 = 1. / (1j * (s.Ip + 0.5 * p * p))
+        #bound2 = np.exp(1j * s.N * Pi * (8 * s.Ip + 4 * p * p + 3 * s.Up) / (4 * s.omega)) / (
+        #            1j * (s.Ip + 0.5 * p * p))
 
-        M_im = it.quad(s.M_integrand, 0, 2 * s.N * Pi / s.omega, args=(p, theta, phi, 1, state_array),
+        M_im = it.quad(s.M_integrand, 0., 2 * s.N * Pi / s.omega, args=(p, theta, phi, 1, state_array),
                             limit=2500,
                             epsabs=1.5e-8)[0]
-        M_re = it.quad(s.M_integrand, 0, 2 * s.N * Pi / s.omega, args=(p, theta, phi, 0, state_array),
+        M_re = it.quad(s.M_integrand, 0., 2 * s.N * Pi / s.omega, args=(p, theta, phi, 0, state_array),
                             limit=2500,
                             epsabs=1.5e-8)[0]
-        return M_re + 1j * M_im  #+ bound1 - bound2
+
+        if s.target == 'hyd1s_analytic':
+            return 1.j * (M_re + 1.j * M_im) - 1/(sqrt_re(2.)*np.pi) * s.DS(p, theta, phi, 0.)**(-2.) \
+                   * (np.exp(1.j*s.S(p, theta, phi, 2.*s.N*np.pi/s.omega)) - np.exp(1.j*s.S(p, theta, phi, 0.)))
+
+        elif s.target == 'asymp_martiny':
+            return 1.j * (M_re + 1.j * M_im) - s.asymp_transform(p, theta, phi, 0., state_array) \
+                   * (np.exp(1.j*s.S(p, theta, phi, 2.*s.N*np.pi/s.omega)) - np.exp(1.j*s.S(p, theta, phi, 0.)))
+
+        else:
+            return M_re + 1j * M_im  #+ bound1 - bound2
 
 
     # Transition amplitude in cartesian co-ordinates
