@@ -319,7 +319,7 @@ cdef class SFALinearPulse:
         return -(p*cos_re(theta)+s.Af(t))*s.Ef(t)
 
 
-    #-------- PREFACTORS and support functions ---------
+    #### PREFACTORS and support functions ####
     cpdef double complex sph_harm(self, int m, int l, double cos_theta, double phi):
         """
         Special case of af 'spherical harmonic' where the Legendre function takes arguments abs(x) > 1. 
@@ -571,7 +571,7 @@ cdef class SFALinearPulse:
         return np.array([s.Mxy(px, py, pz, tf, state_array) for px, pz in zip(pxList, pzList)])
 
 
-    ### Code for exact integration of the prefactor!
+    #### Code for exact integration of the prefactor! ####
     cpdef double complex d0_analytic_hyd1s(self, double p, double theta, double phi, double t):
         """
         Analytic transition amplitude for ground state of hydrogen, see eq. 75 + 76 in Milosevic review. 

@@ -174,6 +174,61 @@ def get_asymptotic_coeffs(func, n_r, n_samp, Ip, Z=1, interval=None, plot=False,
         return clm_lst
 
 
+def convert_list_to_clm_array(coeff_list):
+    """
+    Converts a flat array of Clm coeffs into the form of the Clm array used in this script: array[sign, l, abs(m)],
+    with sign = 1 means -m and sign = 1 is +m. Note that the list must have the correct number of entries to match a
+    l value.
+    """
+    max_l = np.sqrt(len(coeff_list)) - 1
+    if max_l % 1 != 0:
+        print('Invalid length of list!')
+        return None
+
+    clm_array = np.zeros((2, int(max_l)+1, int(max_l)+1))
+    counter = 0
+
+    for l in range(int(max_l + 1)):
+        for m in range(-l, l+1):
+            sign = 0 if m >= 0 else 1
+            clm_array[sign, l, abs(m)] = coeff_list[counter]
+            counter += 1
+
+    return clm_array
+
+
+def get_as_from_r_array(func, r_array, n_samp, Ip, Z=1, normalized=False):
+    """
+    Calculates the asymptotic coeffs of func(r, theta, phi) in the given r values.
+    Input is a array of r values in same form as the Clm arrays used in this script.
+    Use convert_list_to_clm_array() first, if you have a flat list of values.
+    """
+    max_l = r_array.shape[1]
+    clm_array = np.zeros_like(r_array, dtype=complex)
+    kappa = np.sqrt(2 * abs(Ip))
+
+    old_r = -1  # To make sure we don't keep calculating the Laplace expansion if r is the same
+    for l in range(max_l):
+        print(f'Calculating for l = {l} and m =', end='')
+        for m in range(-l, l+1):
+            print(f' {m},', end='')
+            sign = 0 if m >= 0 else 1
+            r = r_array[sign, l, abs(m)]
+
+            if r != old_r:  # r is different - find new Laplace expansion!
+                flm_list = spherical_expansion(lambda theta, phi: func(r, theta, phi), n_samp, plot_coeff=False)
+                radial = r ** (Z / kappa - 1) * np.exp(-kappa * r)
+                old_r = r
+
+            clm_array[sign, l, abs(m)] = flm_list[sign, l, abs(m)] / radial  # Get the asymptotic coefficient
+
+        print('\n')
+    if normalized:
+        return clm_array / np.sum(np.abs(clm_array) ** 2)
+    else:
+        return clm_array
+
+
 def eval_asymptotic_cart(x, y, z, coeffs, Ip, Z=1):
     """
     Evaluates the asymptotic wave function in cartesian coordinates
@@ -256,112 +311,3 @@ def eval_cylindrical(phi, coeff_list):
         res += np.exp(1j * m * phi) * coeff
     return res
 
-
-
-"""
-#%%
-def test(theta, phi):
-    return 3 * np.exp(1j * 2 * phi)
-
-inter = OutputInterface('output_files/CHBrClF.out')
-#GTO_params = inter.output_GTOs()
-
-
-r_par = 3
-r_perp = 3
-
-r = np.sqrt(r_par**2 + r_perp**2)
-
-thetam = np.arccos(r_par / r)
-phim = np.pi/2
-
-sph_coeffs = spherical_expansion(lambda theta, phi : inter.eval_orbital_spherical(r, theta, phi), 50, False)
-#sph_coeffs = spherical_expansion(test, 50, False)
-print(eval_sph_from_coeff(thetam, phim, sph_coeffs))
-
-cylind_coeffs = cylindrical_from_spherical(sph_coeffs, r_par, r_perp)
-
-print(eval_cylindrical(phim, cylind_coeffs))
-
-"""
-
-# %%
-
-'''
-def test_func(theta, phi): 
-    m, l = (3, 3)
-    return sph_harm(m, l, phi, theta)
-
-inter = OutputInterface('CHBrClF1.out')
-GTO_params = inter.output_GTOs()
-
-r = 7
-
-test = spherical_expansion(lambda theta, phi: inter.eval_orbital_spherical(r, theta, phi), 40, True)
-# test = spherical_expansion(test_func, 10, True)
-
-# %% PLOT OVER DIFFERENT THETA VALUES
-theta_list = np.linspace(0, np.pi/4, 1000)
-phi = np.pi
-
-dims_list = [np.real(eval_sph_from_coeff(theta, phi, test)) for theta in theta_list]
-inter_list = [inter.eval_orbital_spherical(r, theta, phi) for theta in theta_list]
-
-plt.plot(theta_list, dims_list)
-plt.plot(theta_list, inter_list)
-plt.xlabel(r'$\theta$')
-plt.show()
-
-
-# %% Let's find the clm's for the asymptotic form!
-
-Ip = -inter.saved_orbitals[inter.HOMO][0]
-r_list = np.linspace(2, 20, 30)
-
-clm_r_list = []
-for i,r in enumerate(r_list): 
-    print(i)
-    GTO_sph_coeff = spherical_expansion(lambda theta, phi: inter.eval_orbital_spherical(r, theta, phi), 20)
-    clm_r_list.append(find_clm(GTO_sph_coeff, r, Ip))
-
-
-# %% Plot how the expansion coeffs vary as func of r...
-max_index = np.unravel_index(np.argmax(np.abs(clm_r_list[0])), clm_r_list[0].shape)
-# max_index = (1, 3, 1)
-max_coeff = []
-for clm_i in clm_r_list: 
-    max_coeff.append(clm_i[max_index])
-
-plt.plot(r_list, np.real(max_coeff), label=r'Re$[c_{\ell m}]$')
-plt.plot(r_list, np.imag(max_coeff), label=r'Im$[c_{\ell m}]$')
-plt.plot(r_list, np.abs(max_coeff), label=r'$|c_{\ell m}|$')
-inter_list = [(100*inter.eval_orbital_spherical(r, np.pi/2, np.pi/2)) for r in r_list]
-plt.plot(r_list, inter_list, label=r'$\psi$')
-plt.xlabel(r'$r$ (a.u.)')
-plt.ylabel(r'Amplitude')
-plt.legend(frameon=False)
-plt.show()
-
-
-# %% Calculate for about r=7..
-r_cal = 7 
-GTO_sph_coeffs = spherical_expansion(lambda theta, phi: inter.eval_orbital_spherical(r_cal, theta, phi), 50)
-asymptotic_coeffs = find_clm(GTO_sph_coeffs, r_cal, Ip)
-
-# %%
-theta = 1
-phi = 2 
-r = 10
-val = eval_asymptotic(r, theta, phi, asymptotic_coeffs, Ip)
-
-print(val)
-print(inter.eval_orbital_spherical(r, theta, phi))
-
-
-# %%
-r_plot = np.linspace(3, 10, 100)'''
-
-# %%
-
-
-# %%
