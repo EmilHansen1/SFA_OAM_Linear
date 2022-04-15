@@ -20,7 +20,7 @@ pool = multiprocessing.Pool(processes=cpus)
 
 # %% GET GTO COEFFICIENTS
 
-output = oi.OutputInterface('output_files/N2.out')
+output = oi.OutputInterface('output_files/R-CHBrClF.out')
 Ip = abs(output.saved_orbitals[output.HOMO][0])
 kappa = np.sqrt(2*Ip)
 omega = 0.057     # Frequency of light
@@ -32,7 +32,7 @@ gto_coeffs = np.array(output.output_GTOs())
 
 # %% CALCULATE THE PMD
 
-dp = 4. / 100
+dp = 4. / 150
 px_lst = np.arange(-1, 1, dp)
 pz_lst = np.arange(-1.5, 1.5, dp)
 py = 0.
@@ -47,7 +47,7 @@ print('GTO done!')
 # %% PLOT RESULT
 
 plt.imshow(M_gto_sqr, interpolation='bicubic', cmap='inferno',
-                 norm=LogNorm(vmax=np.max(M_gto_sqr), vmin=np.max(M_gto_sqr)*1e-8),
+                 norm=LogNorm(vmax=np.max(M_gto_sqr), vmin=np.max(M_gto_sqr)*1e-3),
                  extent=(-1, 1, -1.5, 1.5))
 plt.xlabel(r'$p_\perp$ (a.u.)')
 #ax2.set_ylabel(r'$p_\parallel$ (a.u.)')

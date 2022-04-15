@@ -17,11 +17,11 @@ import mpmath as mp
 import functools
 import multiprocessing
 import scipy.integrate as it
+from scipy.optimize import root
 
 import numpy as np
 cimport numpy as np
 from numpy cimport ndarray
-
 
 cimport cython
 
@@ -38,6 +38,7 @@ from libc.math cimport abs as abs_re
 from libc.math cimport pow as pow_re
 from libc.math cimport atan2 as atan2_re
 from libc.math cimport tgamma as gamma
+
 #from libc.math cimport  cyl_bessel_j as bessel_j_re
 
 
@@ -45,12 +46,12 @@ from libc.math cimport tgamma as gamma
 ctypedef fused dbl_or_cmplx:
     double
     double complex
-    
+
 ctypedef fused c_dbl_int:
     int
     double
     double complex
-    
+
 cdef extern from "<complex.h>" namespace "std" nogil:
     double complex exp(double complex z)
     double complex sin(double complex z)
@@ -69,27 +70,26 @@ cdef double complex I1 = 1j
 cdef double Pi = np.pi
 cdef double rtPi = np.sqrt(Pi)
 cdef double rt2 = np.sqrt(2.)
-cdef int cacheSize = 2**20
+cdef int cacheSize = 2 ** 20
 
 #Code to import old CQSFA prefactor code
 # cdef extern from "HpgForms.h":
 #     double complex calculateHMatrixElement(int target, double Ip, double complex pz, double px,  double complex ts, double complex Eft, double complex Aft, double theta)
 
-### shorcut functions to efficntly switch trig between real and complex varients    
+### shorcut functions to efficntly switch trig between real and complex varients
 cdef sin_c(dbl_or_cmplx t):
-        if(dbl_or_cmplx is double):
-            return sin_re(t)
-        else:
-            return sin(t)
+    if (dbl_or_cmplx is double):
+        return sin_re(t)
+    else:
+        return sin(t)
 cdef cos_c(dbl_or_cmplx t):
-        if(dbl_or_cmplx is double):
-            return cos_re(t)
-        else:
-            return cos(t)
-        
-cdef cot_c(dbl_or_cmplx t):
-        return cos_c(t)/sin_c(t)
+    if (dbl_or_cmplx is double):
+        return cos_re(t)
+    else:
+        return cos(t)
 
+cdef cot_c(dbl_or_cmplx t):
+    return cos_c(t) / sin_c(t)
 
 cdef class SFALinearPulse:
     '''
@@ -101,7 +101,7 @@ cdef class SFALinearPulse:
     cdef public int OAM
     cdef readonly str target
     #cdef object __weakref__ # enable weak referencing support
-    
+
     def __init__(self, Ip_=0.5, Up_=0.44, omega_=0.057, N_=6, CEP_=0., target_="None", OAM_=1000, Z_=1):
         """
             Initialise field and target parameters defaults correspond to 800nm wl and 2 10^14 W/cm^2 intensity
@@ -111,28 +111,26 @@ cdef class SFALinearPulse:
         #Set pulse and targetvparameters
         self.Ip = Ip_
         self.Up = Up_
-        self.rtUp = np.sqrt(Up_) #must change this if Up is changed! Fixed by making Up readonly
+        self.rtUp = np.sqrt(Up_)  #must change this if Up is changed! Fixed by making Up readonly
         self.omega = omega_
-        self.kappa = np.sqrt(2*Ip_)
+        self.kappa = np.sqrt(2 * Ip_)
         self.Z = Z_
         self.OAM = OAM_  # Standard value of 1000 means that no OAM is not used
 
         self.N = N_
         self.CEP = CEP_
-        
+
         self.AlignmentAngle = 0.
         self.target = target_
         self.test_target()
-
 
     def test_target(self):
         """
         Give a warning if wrong target is selected
         """
-        target_list = ['hyd1s_analytic', 'GTO', 'asymp', 'asymp_martiny']
+        target_list = ['hyd1s_analytic', 'GTO', 'asymp', 'asymp_martiny', 'GTO_MO_SPA']
         if not self.target == 'None' and self.target not in target_list:
             print('Warning: The chosen target is not known! Will calculate with prefractor set to 1.')
-
 
     #@functools.lru_cache(maxsize=cacheSize)
     cdef dbl_or_cmplx F(s, dbl_or_cmplx t):
@@ -140,109 +138,110 @@ cdef class SFALinearPulse:
         envelope for Sin^2 laser pulse
         '''
         #need to be fast can get evalutated millions of times
-        if(real(t)<0 or real(t)>2*s.N*Pi/s.omega):
+        if (real(t) < 0 or real(t) > 2 * s.N * Pi / s.omega):
             return 0
-        return 2*s.rtUp *  sin_c(s.omega * t / (2*s.N))**2
-
+        return 2 * s.rtUp * sin_c(s.omega * t / (2 * s.N)) ** 2
 
     #@functools.lru_cache(maxsize=cacheSize)
     cpdef dbl_or_cmplx Af(s, dbl_or_cmplx t):
         '''
         Vector potential for Gaussian laser pulse
         '''
-        if(real(t)<0 or real(t)>2*s.N*Pi/s.omega):
+        if (real(t) < 0 or real(t) > 2 * s.N * Pi / s.omega):
             return 0
         cdef dbl_or_cmplx envelope, carrier
         envelope = s.F(t)
-        if(dbl_or_cmplx is double):
-            carrier = cos_re(s.omega*t + s.CEP)
+        if (dbl_or_cmplx is double):
+            carrier = cos_re(s.omega * t + s.CEP)
         else:
-            carrier = cos(s.omega*t + s.CEP)
-        return  envelope * carrier
-    
+            carrier = cos(s.omega * t + s.CEP)
+        return envelope * carrier
+
     #@functools.lru_cache(maxsize=cacheSize)
     cpdef dbl_or_cmplx Ef(s, dbl_or_cmplx t):
         '''
         Electric Field for Sin^2 laser pulse
         '''
-        if(real(t)<0 or real(t)>2*s.N*Pi/s.omega):
+        if (real(t) < 0 or real(t) > 2 * s.N * Pi / s.omega):
             return 0
         cdef dbl_or_cmplx cos1, sin1, cos2, sin2, env
-        env = s.omega*s.F(t)
-        cos1 = cos_c(s.omega*t + s.CEP)
-        sin1 = sin_c(s.omega*t + s.CEP)
-        
-        cos2 = cos_c(s.omega*t/(2*s.N))
-        sin2 = sin_c(s.omega*t/(2*s.N))
-        return env*sin1-2*s.rtUp*s.omega *cos1*cos2*sin2/s.N
-    
+        env = s.omega * s.F(t)
+        cos1 = cos_c(s.omega * t + s.CEP)
+        sin1 = sin_c(s.omega * t + s.CEP)
+
+        cos2 = cos_c(s.omega * t / (2 * s.N))
+        sin2 = sin_c(s.omega * t / (2 * s.N))
+        return env * sin1 - 2 * s.rtUp * s.omega * cos1 * cos2 * sin2 / s.N
+
     #@functools.lru_cache(maxsize=cacheSize)
     cpdef dbl_or_cmplx AfI(s, dbl_or_cmplx t):
         '''
             Integral of vector potential
         '''
-        cdef double factor, a1, a2, a3, AI0=0
+        cdef double factor, a1, a2, a3, AI0 = 0
         cdef dbl_or_cmplx s1, s2, s3
         #Case if N==1 as general expression will diverge
-        if(s.N==1):
-            A10 = (3*s.rtUp*sin_re(s.CEP))/(4.*s.omega)
-            return -(s.rtUp*(2*t*s.omega*cos_re(s.CEP) - 4*sin_c(t*s.omega + s.CEP) + sin_c(2*t*s.omega + s.CEP)))/(4.*rt2*s.omega) - AI0
+        if (s.N == 1):
+            A10 = (3 * s.rtUp * sin_re(s.CEP)) / (4. * s.omega)
+            return -(s.rtUp * (2 * t * s.omega * cos_re(s.CEP) - 4 * sin_c(t * s.omega + s.CEP) + sin_c(
+                2 * t * s.omega + s.CEP))) / (4. * rt2 * s.omega) - AI0
         else:
-            AI0 = (s.rtUp*sin_re(s.CEP))/(s.omega - s.N**2*s.omega) # AfI(0) to ensure limits are correct.
-            a1 = s.N*s.N - 1
-            a2 = (s.N + 1.)/s.N
-            a3 = (s.N - 1.)/s.N
-            factor = s.rtUp/(2*s.omega*a1)
+            AI0 = (s.rtUp * sin_re(s.CEP)) / (s.omega - s.N ** 2 * s.omega)  # AfI(0) to ensure limits are correct.
+            a1 = s.N * s.N - 1
+            a2 = (s.N + 1.) / s.N
+            a3 = (s.N - 1.) / s.N
+            factor = s.rtUp / (2 * s.omega * a1)
 
-            s1 = sin_c(s.omega*t + s.CEP)
-            s2 = sin_c(s.CEP + a2 *s.omega*t)
-            s3 = sin_c(s.CEP + a3 *s.omega*t)
+            s1 = sin_c(s.omega * t + s.CEP)
+            s2 = sin_c(s.CEP + a2 * s.omega * t)
+            s3 = sin_c(s.CEP + a3 * s.omega * t)
 
-            return factor * (2*a1*s1 - s.N*s.N *( a3*s2 + a2*s3) ) - AI0
-
-    
+            return factor * (2 * a1 * s1 - s.N * s.N * (a3 * s2 + a2 * s3)) - AI0
 
     #@functools.lru_cache(maxsize=cacheSize)
     cpdef dbl_or_cmplx Af2I(s, dbl_or_cmplx t):
         '''
             Integral of vector potential squared
-        '''     
-        if(s.N==1):
-            AI20 = (-25*s.Up*sin_re(2*s.CEP))/(96.*s.omega)
-            return (3*s.Up*(4*(6*t*s.omega + t*s.omega*cos_re(2*s.CEP) -8*sin_c(t*s.omega) + sin_c(2*t*s.omega) + 3*sin_c(2*(s.CEP + t*s.omega)) - 4*sin_c(2*s.CEP + t*s.omega)) + sin_c(2*(s.CEP + 2*t*s.omega))) - 16*s.Up0*sin_c(2*s.CEP + 3*t*s.omega))/(96.*s.omega)
-        
-        AI20 = (3*s.Up*cos_re(s.CEP)*sin_re(s.CEP))/(4*s.omega - 20*s.N**2*s.omega + 16*s.N**4*s.omega)
+        '''
+        if (s.N == 1):
+            AI20 = (-25 * s.Up * sin_re(2 * s.CEP)) / (96. * s.omega)
+            return (3 * s.Up * (4 * (6 * t * s.omega + t * s.omega * cos_re(2 * s.CEP) - 8 * sin_c(t * s.omega) + sin_c(
+                2 * t * s.omega) + 3 * sin_c(2 * (s.CEP + t * s.omega)) - 4 * sin_c(2 * s.CEP + t * s.omega)) + sin_c(
+                2 * (s.CEP + 2 * t * s.omega))) - 16 * s.Up0 * sin_c(2 * s.CEP + 3 * t * s.omega)) / (96. * s.omega)
+
+        AI20 = (3 * s.Up * cos_re(s.CEP) * sin_re(s.CEP)) / (
+                    4 * s.omega - 20 * s.N ** 2 * s.omega + 16 * s.N ** 4 * s.omega)
         cdef dbl_or_cmplx s1, s2, s3, s4, s5, s6, s7, c1
-        cdef double a1 = s.omega*(s.N+1)/(s.N), a2 = s.omega*(s.N-1)/(s.N), a3 = s.omega*(2*s.N+1)/(s.N), a4 = s.omega*(2*s.N-1)/(s.N)
-           
-        s1 = sin_c(2*s.omega*t)
-        s2 = sin_c(s.omega*t/s.N)
-        s3 = sin_c(2*s.omega*t/s.N)
-        s4 = sin_c(2*s.CEP + a3*t)
-        s5 = sin_c(2*s.CEP + 2*a2*t)
-        s6 = sin_c(2*s.CEP + 2*a1*t)
-        s7 = sin_c(2*s.CEP + a4*t)
-        c1 = cos_c(2*s.omega*t)
-            
-        return (s.Up/16) * (12*t + 6*c1*sin_re(2*s.CEP)/s.omega + 6*s1*cos_re(2*s.CEP)/s.omega
-                           -(16*s.N/s.omega)*s2 + (2*s.N/s.omega)*s3 - 8*s4/a3 + s5/a2 + s6/a1 - 8*s7/a4)
-        
-        
-    #@functools.lru_cache(maxsize=cacheSize)    
+        cdef double a1 = s.omega * (s.N + 1) / (s.N), a2 = s.omega * (s.N - 1) / (s.N), a3 = s.omega * (2 * s.N + 1) / (
+            s.N), a4 = s.omega * (2 * s.N - 1) / (s.N)
+
+        s1 = sin_c(2 * s.omega * t)
+        s2 = sin_c(s.omega * t / s.N)
+        s3 = sin_c(2 * s.omega * t / s.N)
+        s4 = sin_c(2 * s.CEP + a3 * t)
+        s5 = sin_c(2 * s.CEP + 2 * a2 * t)
+        s6 = sin_c(2 * s.CEP + 2 * a1 * t)
+        s7 = sin_c(2 * s.CEP + a4 * t)
+        c1 = cos_c(2 * s.omega * t)
+
+        return (s.Up / 16) * (12 * t + 6 * c1 * sin_re(2 * s.CEP) / s.omega + 6 * s1 * cos_re(2 * s.CEP) / s.omega
+                              - (16 * s.N / s.omega) * s2 + (
+                                          2 * s.N / s.omega) * s3 - 8 * s4 / a3 + s5 / a2 + s6 / a1 - 8 * s7 / a4)
+
+    #@functools.lru_cache(maxsize=cacheSize)
     cpdef dbl_or_cmplx S(s, double p, double theta, double phi, dbl_or_cmplx t):
         '''
         Action as given by the SFA for a Pulse
         '''
-        cdef dbl_or_cmplx tTerms = (s.Ip + 0.5*p*p)*t
-        cdef dbl_or_cmplx linAI = p*cos_re(theta)*s.AfI(t)
-        cdef dbl_or_cmplx quadAI = 0.5*s.Af2I(t)
+        cdef dbl_or_cmplx tTerms = (s.Ip + 0.5 * p * p) * t
+        cdef dbl_or_cmplx linAI = p * cos_re(theta) * s.AfI(t)
+        cdef dbl_or_cmplx quadAI = 0.5 * s.Af2I(t)
         return tTerms + linAI + quadAI
-    
-    
+
     cpdef dbl_or_cmplx DS(s, double p, double theta, double phi, dbl_or_cmplx t):
-            cdef pz = p*cos_re(theta)
-            return pz*s.Af(t) + 0.5*s.Af(t)*s.Af(t) + 0.5*p*p + s.Ip
-    
+        cdef pz = p * cos_re(theta)
+        return pz * s.Af(t) + 0.5 * s.Af(t) * s.Af(t) + 0.5 * p * p + s.Ip
+
     #@functools.lru_cache(maxsize=cacheSize)
     #REDO for linear field and with CEP!!!!!
     cpdef DSZ(s, double p, double theta, double phi):
@@ -254,47 +253,46 @@ cdef class SFALinearPulse:
             conjugates.
         '''
         #Note for the linear case input varible phi is redundant, keep for genrality though
-        
-        cdef double complex exp_CEP = exp(I1*s.CEP)
-        
+
+        cdef double complex exp_CEP = exp(I1 * s.CEP)
+
         #costruct polynomial in z of order 4*(N+1)
-        poly_coeffs = np.zeros(4*s.N+4+1) + 0.*I1
-        
+        poly_coeffs = np.zeros(4 * s.N + 4 + 1) + 0. * I1
+
         #0 order terms
-        cdef c0 = s.Up*(exp_CEP*exp_CEP) 
-        poly_coeffs[0:5] = [c0/16, -c0/4, 3*c0/8, -c0/4, c0/16]
-        
+        cdef c0 = s.Up * (exp_CEP * exp_CEP)
+        poly_coeffs[0:5] = [c0 / 16, -c0 / 4, 3 * c0 / 8, -c0 / 4, c0 / 16]
+
         #N order terms (+= accounts for cases where coefficients combine)
-        cdef c1 = p*s.rtUp*cos_re(theta)*exp_CEP
-        poly_coeffs[s.N+1:s.N+4] += [-c1/2, c1, -c1/2]
-        
+        cdef c1 = p * s.rtUp * cos_re(theta) * exp_CEP
+        poly_coeffs[s.N + 1:s.N + 4] += [-c1 / 2, c1, -c1 / 2]
+
         #2N order terms
-        poly_coeffs[2*s.N:2*s.N+5] += [s.Up/8, -s.Up/2, 2*s.Ip + p*p + 3*s.Up/4, -s.Up/2, s.Up/8]
-        
+        poly_coeffs[2 * s.N:2 * s.N + 5] += [s.Up / 8, -s.Up / 2, 2 * s.Ip + p * p + 3 * s.Up / 4, -s.Up / 2, s.Up / 8]
+
         #3N order terms
-        cdef c3 = p*s.rtUp*cos_re(theta)/exp_CEP
-        poly_coeffs[3*s.N+1:3*s.N+4] += [-c3/2, c3, -c3/2]
-        
+        cdef c3 = p * s.rtUp * cos_re(theta) / exp_CEP
+        poly_coeffs[3 * s.N + 1:3 * s.N + 4] += [-c3 / 2, c3, -c3 / 2]
+
         #4N order terms
-        cdef c4 = s.Up/(exp_CEP*exp_CEP) 
-        poly_coeffs[4*s.N:] += [c4/16, -c4/4, 3*c4/8, -c4/4, c4/16]
-        
-        
+        cdef c4 = s.Up / (exp_CEP * exp_CEP)
+        poly_coeffs[4 * s.N:] += [c4 / 16, -c4 / 4, 3 * c4 / 8, -c4 / 4, c4 / 16]
+
         return poly_coeffs
-    
+
     cpdef double complex DSZ_val(s, double p, double theta, double phi, dbl_or_cmplx z):
         poly_coeffs = s.DSZ(p, theta, phi)
         cdef double complex sum_val = 0
         for n in range(0, len(poly_coeffs)):
-            sum_val += poly_coeffs[n] * z**n
+            sum_val += poly_coeffs[n] * z ** n
         return sum_val
-    
+
     cdef double complex addIfRealNeg(s, double complex ts):
-        if(real(ts)<0):
-            return ts + 2*Pi*s.N/s.omega
+        if (real(ts) < 0):
+            return ts + 2 * Pi * s.N / s.omega
         else:
             return ts
-        
+
     #@functools.lru_cache(maxsize=cacheSize)
     #Ensure correction transformation is done
     cpdef TimesGen(s, double p, double theta, double phi):
@@ -306,18 +304,62 @@ cdef class SFALinearPulse:
         poly_coeffs = s.DSZ(p, theta, phi)
         z_roots = np.polynomial.polynomial.polyroots(poly_coeffs)
         #now we must transform back using t=I N Log[z]/omega
-        ts_roots = I1*s.N*np.log(z_roots)/s.omega
-        ts_roots = [ts for ts in ts_roots if imag(ts)>0 ] #remove (divergent) solutions with negative imag
+        ts_roots = I1 * s.N * np.log(z_roots) / s.omega
+        ts_roots = [ts for ts in ts_roots if imag(ts) > 0]  #remove (divergent) solutions with negative imag
         #make sure all t values are in the domain [0, 2*pi*N/omega]
         ts_roots = [s.addIfRealNeg(ts) for ts in ts_roots]
-        #sort real parts to easily select specific solutions        
-        return sorted(ts_roots,  key=np.real)
-        
+        #sort real parts to easily select specific solutions
+        return sorted(ts_roots, key=np.real)
+
+    cdef double complex mo_spe(self, double complex t, double p, double theta, double phi, double Rz):
+        # px = p * sin_re(theta) * cos_re(phi) # py = p * sin_re(theta) * sin_re(phi) # pz = p * cos_re(theta)
+        cdef double complex E_dot_R = self.Ef(t) * Rz
+        cdef pz = p * cos_re(theta)
+        return pz * self.Af(t) + 0.5 * self.Af(t) * self.Af(t) + 0.5 * p * p + self.Ip + E_dot_R
+
+    cpdef mo_spe_real(self, Y, double p, double theta, double phi, double Rz):
+        cdef double t_re, t_im
+        t_re, t_im = Y
+        cdef double complex ts = t_re + 1j * t_im
+        val = self.mo_spe(ts, p, theta, phi, Rz)
+        return np.array([val.real, val.imag])
+
+    cpdef mo_times_gen(self, double p, double theta, double phi, double Rz):
+        guess_times = self.TimesGen(p, theta, phi)
+        times = []
+        for ts in guess_times:
+            sol = root(self.mo_spe_real, np.array([ts.real, ts.imag]), args=(p, theta, phi, Rz))
+            times.append(complex(*sol.x))
+            if not sol.success:
+                print('FATAL ERROR! THE APOCALYPSE IS UPON US!')
+        return np.array(times, dtype=complex)
+
+    cpdef double complex DDEf(self, double complex t):
+        '''
+        Double time derivative of the electric field
+        '''
+        cdef double prefactor = - 2.0 * sqrt_re(self.Up) * self.omega**2 / self.N**2
+        cdef double complex term1 = cos(self.omega * t + self.CEP) * (self.N**2 + 1.0) \
+                                    * cos(self.omega * t / (2.0 * self.N))**2
+        cdef double complex term2 = -2.0 * self.N * sin(self.omega * t / (2.0 * self.N)) \
+                                    * cos(self.omega * t / (2.0 * self.N)) * sin(self.omega * t + self.CEP)
+        cdef double complex term3 = -cos(self.omega * t + self.CEP) * (self.N**2 + 0.5)
+        return prefactor * (term1 + term2 + term3)
+
+    cpdef double complex DDPhi(self, double p, double theta, double phi, double complex t, double Rz):
+        '''
+        Double time derivative of the modified action for the MO-SPA
+        '''
+        cdef pz = p * cos_re(theta)
+        cdef double complex term1 = -(pz + self.Af(t)) * self.Ef(t)
+        cdef double complex term2 = Rz * self.DDEf(t)
+        return term1 + term2
+
+
     #1 varible determinant for saddle point approximation
     cpdef double complex DDS(s, double p, double theta, double phi, double complex t):
         '''Second order derivative of action wrt t'''
-        return -(p*cos_re(theta)+s.Af(t))*s.Ef(t)
-
+        return -(p * cos_re(theta) + s.Af(t)) * s.Ef(t)
 
     #### PREFACTORS and support functions ####
     cpdef double complex sph_harm(self, int m, int l, double cos_theta, double phi):
@@ -325,7 +367,8 @@ cdef class SFALinearPulse:
         Special case of af 'spherical harmonic' where the Legendre function takes arguments abs(x) > 1. 
         If OAM is given, 
         """
-        cdef double factor = np.sqrt((2.*l+1.) / (4.*np.pi) * np.math.factorial(l-abs(m)) / np.math.factorial(l+abs(m)))
+        cdef double factor = np.sqrt(
+            (2. * l + 1.) / (4. * np.pi) * np.math.factorial(l - abs(m)) / np.math.factorial(l + abs(m)))
         cdef double complex spherical_harm
 
         if self.OAM == 1000:  # This is just the normal case - return the full spherical harmonic
@@ -336,8 +379,7 @@ cdef class SFALinearPulse:
         if m >= 0:
             return spherical_harm
         else:
-            return (-1)**abs(m) * np.conj(spherical_harm)
-
+            return (-1) ** abs(m) * np.conj(spherical_harm)
 
     cpdef double I2_factor(self, int l):
         """
@@ -345,7 +387,7 @@ cdef class SFALinearPulse:
         """
         cdef double nu = self.Z / self.kappa
         cdef double factor = self.kappa ** (nu + 3. / 2.) * gamma(l + nu + 3.) / gamma(l + 3. / 2.) * (
-                    2. * self.kappa) ** (-l - 1.) * 2. ** (-nu - 2.)
+                2. * self.kappa) ** (-l - 1.) * 2. ** (-nu - 2.)
 
         # Determine the hypergeometric function in the saddle points (z=1 always):
         cdef double a = 0.5 * (l - nu - 1.)
@@ -354,7 +396,6 @@ cdef class SFALinearPulse:
         cdef double hyper_geo = gamma(c) * gamma(c - a - b) / (gamma(c - a) * gamma(c - b))
 
         return hyper_geo * factor
-
 
     cpdef double complex d_asymp_Er(self, double p, double theta, double phi, double complex ts, clm_array):
         """
@@ -411,13 +452,13 @@ cdef class SFALinearPulse:
                     factor2 = p_t ** (l - 1) * self.sph_harm(m, l - 1, cos_theta_t, phi)
 
                 # Add the l,m contribution to d
-                d_res += clm * I1 * ((-1j) ** (l + 1) * alpha_p * I2_p * factor1 + (-1j) ** (l - 1) * alpha_m * I2_m * factor2)
+                d_res += clm * I1 * (
+                            (-1j) ** (l + 1) * alpha_p * I2_p * factor1 + (-1j) ** (l - 1) * alpha_m * I2_m * factor2)
 
         if self.OAM == 1000:  # OAM selection is not activated
             return d_res
-        else:                 # OAM selection is activated - remember the i**OAM!
-            return d_res * 1j**self.OAM
-
+        else:  # OAM selection is activated - remember the i**OAM!
+            return d_res * 1j ** self.OAM
 
     cpdef double complex d_asymp_martiny(self, double p, double theta, double phi, double complex ts, clm_array):
         """
@@ -443,14 +484,15 @@ cdef class SFALinearPulse:
         cos_theta_t = np.imag(pz_t) / np.imag(p_t)  # pz_t and p_t are both imaginary in saddle points
 
         # Start calculating the prefactor itself! Everything not depending on l,m:
-        factor1 = gamma(nu/2.+1.)/sqrt_re(2*np.pi) * (1j*self.kappa)**nu * (2./1j * ddS)**(nu/2.) / ddS**nu
-                # * sqrt(2.*np.pi*1.j/ddS) * np.exp(1.j*self.S(p, theta, phi, ts))
+        factor1 = gamma(nu / 2. + 1.) / sqrt_re(2 * np.pi) * (1j * self.kappa) ** nu * (2. / 1j * ddS) ** (
+                    nu / 2.) / ddS ** nu
+        # * sqrt(2.*np.pi*1.j/ddS) * np.exp(1.j*self.S(p, theta, phi, ts))
 
         # Everything depending on l,m:
         for l in range(0, max_l):
-            factor2 = (p_t/(1.j*self.kappa))**l
+            factor2 = (p_t / (1.j * self.kappa)) ** l
 
-            for m in range(-l, l+1):
+            for m in range(-l, l + 1):
                 # Get clm
                 sign = 0 if m >= 0 else 1
                 clm = clm_array[sign, l, abs(m)]
@@ -458,16 +500,15 @@ cdef class SFALinearPulse:
                 if abs(clm) == 0:  # Don't calculate if it's zero anyway...
                     continue
                 if self.OAM != 1000:  # Possibility for OAM selection - only calculate m values matching OAM
-                    if m != self. OAM:
+                    if m != self.OAM:
                         continue
 
                 d_res += factor2 * clm * self.sph_harm(m, l, cos_theta_t, phi)
 
         if self.OAM == 1000:  # OAM selection is not activated
             return d_res * factor1 * 1j
-        else:                 # OAM selection is activated - remember the i**OAM!
-            return d_res * factor1 * 1j * 1j**self.OAM
-
+        else:  # OAM selection is activated - remember the i**OAM!
+            return d_res * factor1 * 1j * 1j ** self.OAM
 
     cpdef dbl_or_cmplx hermite_poly(self, int n, dbl_or_cmplx z):
         if n == 0:
@@ -486,25 +527,24 @@ cdef class SFALinearPulse:
             print('Too high n: not implemented')
             return 0.0
 
-
     cpdef double complex di_gto(self, double p, double theta, double phi, dbl_or_cmplx ts,
-                               double front_factor, double alpha, int i, int j, int k,
-                               double xa, double ya, double za):
+                                double front_factor, double alpha, int i, int j, int k,
+                                double xa, double ya, double za):
         """ Bound state prefactor d(p,t)=<p+A|H|0> in the LG using LCAO and GTOs from GAMESS coefficients """
-        cdef double px = p*sin_re(theta) * cos_re(phi)
-        cdef double py = p*sin_re(theta) * sin_re(phi)
-        cdef double complex pz = p*cos_re(theta) + self.Af(ts)
+        cdef double px = p * sin_re(theta) * cos_re(phi)
+        cdef double py = p * sin_re(theta) * sin_re(phi)
+        cdef double complex pz = p * cos_re(theta) + self.Af(ts)
 
-        cdef double complex result = 2.**(-(i + j + k) - 3./2) * alpha**(-(i + j + k)/2. - 3./2) \
-                                     * np.exp(-1j*(px*xa + py*ya + pz*za)) \
-                                     * np.exp(-(px**2 + py**2 + pz**2)/(4.*alpha)) \
-                                     * np.exp(-1.j*np.pi*(i + j + k)/2.)*self.Ef(ts) \
-                                     * self.hermite_poly(i, px/(2.*sqrt_re(alpha))) \
-                                     * self.hermite_poly(j, py/(2.*sqrt_re(alpha))) \
-                                     * (za*self.hermite_poly(k, pz/(2.*sqrt_re(alpha))) -
-                                       1.j/(2.*sqrt_re(alpha))*self.hermite_poly(k + 1, pz/(2.*sqrt_re(alpha))))
+        cdef double complex result = 2. ** (-(i + j + k) - 3. / 2) * alpha ** (-(i + j + k) / 2. - 3. / 2) \
+                                     * np.exp(-1j * (px * xa + py * ya + pz * za)) \
+                                     * np.exp(-(px ** 2 + py ** 2 + pz ** 2) / (4. * alpha)) \
+                                     * np.exp(-1.j * np.pi * (i + j + k) / 2.) * self.Ef(ts) \
+                                     * self.hermite_poly(i, px / (2. * sqrt_re(alpha))) \
+                                     * self.hermite_poly(j, py / (2. * sqrt_re(alpha))) \
+                                     * (za * self.hermite_poly(k, pz / (2. * sqrt_re(alpha))) -
+                                        1.j / (2. * sqrt_re(alpha)) * self.hermite_poly(k + 1,
+                                                                                        pz / (2. * sqrt_re(alpha))))
         return front_factor * result
-
 
     cpdef double complex d_gto(self, double p, double theta, double phi, dbl_or_cmplx ts, coefficients):
         """ Total GTO prefactor from GAMESS coefficients """
@@ -516,7 +556,6 @@ cdef class SFALinearPulse:
             front_factor, alpha, i, j, k, x_a, y_a, z_a = row
             result += self.di_gto(p, theta, phi, ts, front_factor, alpha, i, j, k, x_a, y_a, z_a)
         return result
-
 
     cpdef double complex d0(self, double p, double theta, double phi, double complex ts, state_array=None):
         """
@@ -531,45 +570,62 @@ cdef class SFALinearPulse:
         else:
             return 1.
 
-
-    @cython.boundscheck(False) # turn off bounds-checking for entire function  
+    @cython.boundscheck(False)  # turn off bounds-checking for entire function
     @cython.wraparound(False)  # turn off negative index wrapping for entire function
     #@functools.lru_cache(maxsize=cacheSize)
-    cpdef double complex M(s, double p, double theta, double phi, double tf = np.inf, state_array=None):  # double pz, double px, double t, int N, int eLim):
+    cpdef double complex M(s, double p, double theta, double phi, double tf = np.inf,
+                           state_array=None):  # double pz, double px, double t, int N, int eLim):
         '''
         Final transition amplitude
         Constructed as sum 
         '''
         cdef double complex MSum = 0.
+        cdef double complex d = 0.
+        cdef double x_a, y_a, z_a, alpha, front_factor
+        cdef int i, j, k
+        cdef double complex ts = 0.
+        cdef double px = p * sin_re(theta) * cos_re(phi)
+        cdef double py = p * sin_re(theta) * sin_re(phi)
+        cdef double complex pz = p * cos_re(theta)
+
+        if s.target == 'GTO_MO_SPA':
+            #print('Im doing the rea shit!')
+            #d = 0. + 0.j
+            for row in state_array:
+                front_factor, alpha, i, j, k, x_a, y_a, z_a = row
+                times = s.mo_times_gen(p, theta, phi, z_a)
+                for ts in times:
+                    if real(ts) < tf:
+                        d = s.di_gto(p, theta, phi, ts, front_factor, alpha, i, j, k, x_a, y_a, z_a)
+                        det = sqrt(2. * Pi * I1 / s.DDPhi(p, theta, phi, ts, z_a))
+                        exp_phi = np.exp(I1 * s.S(p, theta, phi, ts) - I1 * (px * x_a + py * y_a + (pz + s.Af(ts)) * z_a))
+                        MSum += det * d * exp_phi
+            return MSum
 
         times = s.TimesGen(p, theta, phi)
         for ts in times:
-            if(real(ts)<tf):
-                det = sqrt(2.*Pi*I1/s.DDS(p, theta, phi, ts))
-                expS = exp(I1*s.S(p, theta, phi, ts))
+            if (real(ts) < tf):
+                det = sqrt(2. * Pi * I1 / s.DDS(p, theta, phi, ts))
+                expS = exp(I1 * s.S(p, theta, phi, ts))
                 d0 = s.d0(p, theta, phi, ts, state_array)
-                MSum += d0*det*expS
+                MSum += d0 * det * expS
         return MSum
-
 
     # Transition amplitude in cartesian co-ordinates
     cpdef double complex Mxy(s, px, py, pz, tf = np.inf, state_array=None):
-        cdef double p = sqrt_re(px*px + py*py +pz*pz)
-        cdef double theta = acos_re(pz/p)
+        cdef double p = sqrt_re(px * px + py * py + pz * pz)
+        cdef double theta = acos_re(pz / p)
         cdef double phi = atan2_re(py, px)
         return s.M(p, theta, phi, tf, state_array)
 
-
     # List comprehension over cartesian transition amplitude
-    @cython.boundscheck(False) # turn off bounds-checking for entire function
+    @cython.boundscheck(False)  # turn off bounds-checking for entire function
     @cython.wraparound(False)  # turn off negative index wrapping for entire function
     def Mxy_List(s, pxList, pyList, double pz, tf = np.inf, state_array=None):
         return np.array([s.Mxy(px, py, pz, tf, state_array) for px, py in zip(pxList, pyList)])
 
-
     def Mxz_List(s, pxList, double py, pzList, state_array=None, tf = np.inf):
         return np.array([s.Mxy(px, py, pz, tf, state_array) for px, pz in zip(pxList, pzList)])
-
 
     #### Code for exact integration of the prefactor! ####
     cpdef double complex d0_analytic_hyd1s(self, double p, double theta, double phi, double t):
@@ -577,8 +633,7 @@ cdef class SFALinearPulse:
         Analytic transition amplitude for ground state of hydrogen, see eq. 75 + 76 in Milosevic review. 
         ONLY works for numerical calculations, as divergent in saddle points! 
         """
-        return 1./(sqrt_re(2.) * np.pi) / self.DS(p, theta, phi, t)
-
+        return 1. / (sqrt_re(2.) * np.pi) / self.DS(p, theta, phi, t)
 
     cpdef double complex asymp_transform(self, double p, double theta, double phi, double t, clm_array):
         """
@@ -593,25 +648,25 @@ cdef class SFALinearPulse:
         px = p * sin_re(theta) * cos_re(phi)
         py = p * sin_re(theta) * sin_re(phi)
         pz = p * cos_re(theta)
-        p_t = sqrt_re(px**2. + py**2. + (pz + self.Af(t))**2.)
+        p_t = sqrt_re(px ** 2. + py ** 2. + (pz + self.Af(t)) ** 2.)
         pz_t = (pz + self.Af(t)) / p_t
         theta_t = acos_re(pz_t)
 
         # Factor without m,l
-        factor1 = self.kappa**nu * (self.kappa**2 + p_t**2)**(-nu-1)
+        factor1 = self.kappa ** nu * (self.kappa ** 2 + p_t ** 2) ** (-nu - 1)
 
         # Factors with m,l
         for l in range(0, clm_array.shape[1]):
-            factor2 = gamma(l+nu+2.)/gamma(l+3./2.) * (p_t/self.kappa)**l \
-                      * mp.hyp2f1(0.5*(l-nu), 0.5*(l-nu+1.), l+3./2., -p_t**2/self.kappa**2) * 2**(-l-0.5) * (-1.j)**l
+            factor2 = gamma(l + nu + 2.) / gamma(l + 3. / 2.) * (p_t / self.kappa) ** l \
+                      * mp.hyp2f1(0.5 * (l - nu), 0.5 * (l - nu + 1.), l + 3. / 2.,
+                                  -p_t ** 2 / self.kappa ** 2) * 2 ** (-l - 0.5) * (-1.j) ** l
 
-            for m in range(-l, l+1):
+            for m in range(-l, l + 1):
                 sign = 0 if m >= 0 else 1
                 clm = clm_array[sign, l, abs(m)]
                 res += clm * sp.sph_harm(m, l, phi, theta_t) * factor2
 
         return res * factor1
-
 
     cpdef double complex d0_asymp_martiny(self, double p, double theta, double phi, double t, clm_array):
         """
@@ -619,7 +674,6 @@ cdef class SFALinearPulse:
         """
         return self.asymp_transform(p, theta, phi, t, clm_array) \
                * self.DS(p, theta, phi, t) * np.exp(1.j * self.S(p, theta, phi, t))
-
 
     cpdef double complex d0_num(self, double p, double theta, double phi, double t, state_array=None):
         """
@@ -634,7 +688,6 @@ cdef class SFALinearPulse:
         else:
             return 1.
 
-
     cpdef double M_integrand(self, double t, double p, double theta, double phi, int cmplx, state_array=None):
         """
         The integrand of the time integral for numerical integration.
@@ -648,9 +701,8 @@ cdef class SFALinearPulse:
         else:
             return np.real(Mi)
 
-
     cpdef double complex M_num(s, double p, double theta, double phi, double tf = np.inf,
-                           state_array=None):
+                               state_array=None):
         '''
         Final transition amplitude computed numerically 
         '''
@@ -662,40 +714,34 @@ cdef class SFALinearPulse:
         #            1j * (s.Ip + 0.5 * p * p))
 
         M_im = it.quad(s.M_integrand, 0., 2 * s.N * Pi / s.omega, args=(p, theta, phi, 1, state_array),
-                            limit=2500,
-                            epsabs=1.5e-8)[0]
+                       limit=2500,
+                       epsabs=1.5e-8)[0]
         M_re = it.quad(s.M_integrand, 0., 2 * s.N * Pi / s.omega, args=(p, theta, phi, 0, state_array),
-                            limit=2500,
-                            epsabs=1.5e-8)[0]
+                       limit=2500,
+                       epsabs=1.5e-8)[0]
 
         if s.target == 'hyd1s_analytic':
-            return 1.j * (M_re + 1.j * M_im) - 1/(sqrt_re(2.)*np.pi) * s.DS(p, theta, phi, 0.)**(-2.) \
-                   * (np.exp(1.j*s.S(p, theta, phi, 2.*s.N*np.pi/s.omega)) - np.exp(1.j*s.S(p, theta, phi, 0.)))
+            return 1.j * (M_re + 1.j * M_im) - 1 / (sqrt_re(2.) * np.pi) * s.DS(p, theta, phi, 0.) ** (-2.) \
+                   * (np.exp(1.j * s.S(p, theta, phi, 2. * s.N * np.pi / s.omega)) - np.exp(
+                1.j * s.S(p, theta, phi, 0.)))
 
         elif s.target == 'asymp_martiny':
             return 1.j * (M_re + 1.j * M_im) - s.asymp_transform(p, theta, phi, 0., state_array) \
-                   * (np.exp(1.j*s.S(p, theta, phi, 2.*s.N*np.pi/s.omega)) - np.exp(1.j*s.S(p, theta, phi, 0.)))
+                   * (np.exp(1.j * s.S(p, theta, phi, 2. * s.N * np.pi / s.omega)) - np.exp(
+                1.j * s.S(p, theta, phi, 0.)))
 
         else:
             return M_re + 1j * M_im  #+ bound1 - bound2
 
-
     # Transition amplitude in cartesian co-ordinates
     cpdef double complex Mxy_num(s, px, py, pz, tf = np.inf, state_array=None):
-        cdef double p = sqrt_re(px*px + py*py +pz*pz)
-        cdef double theta = acos_re(pz/p)
+        cdef double p = sqrt_re(px * px + py * py + pz * pz)
+        cdef double theta = acos_re(pz / p)
         cdef double phi = atan2_re(py, px)
         return s.M_num(p, theta, phi, tf, state_array)
 
-
     def Mxz_List_num(s, pxList, double py, pzList, state_array=None, tf = np.inf):
         return np.array([s.Mxy_num(px, py, pz, tf, state_array) for px, pz in zip(pxList, pzList)])
-
-
-
-
-
-
 
     ####   ---   OAM Functions   ---   ####
     cpdef Ml(s, double p, double theta, int Nphi = 250):
@@ -705,43 +751,39 @@ cdef class SFALinearPulse:
         """
         phiList = np.linspace(-Pi, Pi, Nphi)
         MphiList = [s.M(p, theta, phi) for phi in phiList]
-        return np.fft.fft(MphiList)/Nphi
+        return np.fft.fft(MphiList) / Nphi
 
-
-    @cython.boundscheck(False) # turn off bounds-checking for entire function
+    @cython.boundscheck(False)  # turn off bounds-checking for entire function
     @cython.wraparound(False)  # turn off negative index wrapping for entire function
     def Ml_List(s, pList, theta, Nphi = 250):
-        return np.array([[abs(M)**2 for M in s.Ml(p, theta, Nphi)] for p in pList]).T
-
+        return np.array([[abs(M) ** 2 for M in s.Ml(p, theta, Nphi)] for p in pList]).T
 
     cpdef Mlxz(s, px, pz, int Nphi = 250):
         """
         convert Ml to cartesian coordinates, note px is the perpendicular coordinate st. px^2 = px^2+py^2
         """
-        cdef double p = sqrt_re(px*px +pz*pz)
-        cdef double theta = acos_re(pz/p)
+        cdef double p = sqrt_re(px * px + pz * pz)
+        cdef double theta = acos_re(pz / p)
         return s.Ml(p, theta, Nphi)
-    
-    @cython.boundscheck(False) # turn off bounds-checking for entire function
+
+    @cython.boundscheck(False)  # turn off bounds-checking for entire function
     @cython.wraparound(False)  # turn off negative index wrapping for entire function
     def Mlxz_List(s, pxList, pzList, Nphi = 250):
-        return np.array([[abs(M)**2 for M in s.Mlxz(px, pz, Nphi)] for px, pz in zip(pxList, pzList)])
-
+        return np.array([[abs(M) ** 2 for M in s.Mlxz(px, pz, Nphi)] for px, pz in zip(pxList, pzList)])
 
     #####   ---   code for spectra
     cpdef double Spectra(s, double E, double phi = 0., double t = np.inf, double err = 1.0e-4, int limit = 500):
-        """Function for the spectra"""  
-        Norm_val, Norm_error = it.quad(s.Spec_Norm, 0, Pi, args = (phi, E, t), epsabs=err, epsrel=err, limit=limit  )    
+        """Function for the spectra"""
+        Norm_val, Norm_error = it.quad(s.Spec_Norm, 0, Pi, args=(phi, E, t), epsabs=err, epsrel=err, limit=limit)
         return Norm_val
-     
+
     #Spectra Norm integrand
     cpdef double Spec_Norm(s, double theta, double phi, double E, double t = np.inf):
         """Function to compute the integrand of the theta integral for the 'spectra"""
         #phrased in spherical coordinates
         #cdef double complex M, Mg
         cdef double px, pr
-        pr = sqrt_re(2*E)
-        px = pr*sin_re(theta)
-        
-        return abs(s.M(pr, theta, phi, t))**2 *px * 2*Pi
+        pr = sqrt_re(2 * E)
+        px = pr * sin_re(theta)
 
+        return abs(s.M(pr, theta, phi, t)) ** 2 * px * 2 * Pi
