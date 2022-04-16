@@ -86,7 +86,7 @@ class OutputInterface:
                     atom_nr = 1
                     while line != '\n':
                         self.position[atom_nr] = [float(num)/angs_pr_bohr for num in line.split()[2:]]  # Convert to atomic units!
-                        self.elements[atom_nr] = line.split()[1]
+                        self.elements[atom_nr] = line.split()[0]
                         line = file.readline()
                         atom_nr += 1
                     break  # We don't want to read more of the file!
@@ -337,3 +337,33 @@ class OutputInterface:
         z = r * np.cos(theta)
         return self.eval_orbital(x, y, z, orbital_nr)
 
+    def eval_atom(self, x, y, z, atom_nr, orbital_nr=None):
+        """ Evaluates the wavefunction for a given atom in an orbital, in the point (x,y,z).
+        Should be able to accept ndarrays as input."""
+        # Load the coeffs. and multiply them on the contracted basis sets
+        if orbital_nr is None:
+            orbital_nr = self.HOMO
+
+        MO_coeffs = self.saved_orbitals[orbital_nr][3]
+        atom_pos = self.position[atom_nr]
+
+        return np.sum([MO_c * basis_func.eval(x, y, z) for MO_c, basis_func in zip(MO_coeffs, self.basis_funcs)
+                       if basis_func.atom_position == atom_pos], axis=0)
+
+    def eval_atom_spherical(self, r, theta, phi, atom_nr, orbital_nr=None):
+        """ Evaluates a given orbital given spherical coordinates (r, theta, phi) """
+        if orbital_nr is None:
+            orbital_nr = self.HOMO
+
+        x = r * np.sin(theta) * np.cos(phi)
+        y = r * np.sin(theta) * np.sin(phi)
+        z = r * np.cos(theta)
+        return self.eval_atom(x, y, z, atom_nr, orbital_nr)
+
+    def atom_info(self):
+        """
+        Print out information about atom nr, name and position
+        """
+        print('Number \t Name \t Position (x,y,z) [Bohr]')
+        for i in range(len(self.elements)):
+            print(f'{i+1} \t {self.elements[i+1]} \t {self.position[i+1]}')
