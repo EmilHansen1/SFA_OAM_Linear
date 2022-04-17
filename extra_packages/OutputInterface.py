@@ -337,9 +337,9 @@ class OutputInterface:
         z = r * np.cos(theta)
         return self.eval_orbital(x, y, z, orbital_nr)
 
-    def eval_atom(self, x, y, z, atom_nr, orbital_nr=None):
+    def eval_atom(self, x, y, z, atom_nr, orbital_nr=None, atom_frame=False):
         """ Evaluates the wavefunction for a given atom in an orbital, in the point (x,y,z).
-        Should be able to accept ndarrays as input."""
+        Should be able to accept ndarrays as input. If atom_frame true, (x,y,z) is relative to atom center. """
         # Load the coeffs. and multiply them on the contracted basis sets
         if orbital_nr is None:
             orbital_nr = self.HOMO
@@ -347,10 +347,15 @@ class OutputInterface:
         MO_coeffs = self.saved_orbitals[orbital_nr][3]
         atom_pos = self.position[atom_nr]
 
-        return np.sum([MO_c * basis_func.eval(x, y, z) for MO_c, basis_func in zip(MO_coeffs, self.basis_funcs)
+        if atom_frame:
+            x0, y0, z0 = atom_pos
+        else:
+            x0, y0, z0 = (0, 0, 0)
+
+        return np.sum([MO_c * basis_func.eval(x+x0, y+y0, z+z0) for MO_c, basis_func in zip(MO_coeffs, self.basis_funcs)
                        if basis_func.atom_position == atom_pos], axis=0)
 
-    def eval_atom_spherical(self, r, theta, phi, atom_nr, orbital_nr=None):
+    def eval_atom_spherical(self, r, theta, phi, atom_nr, orbital_nr=None, atom_frame=False):
         """ Evaluates a given orbital given spherical coordinates (r, theta, phi) """
         if orbital_nr is None:
             orbital_nr = self.HOMO
@@ -358,7 +363,7 @@ class OutputInterface:
         x = r * np.sin(theta) * np.cos(phi)
         y = r * np.sin(theta) * np.sin(phi)
         z = r * np.cos(theta)
-        return self.eval_atom(x, y, z, atom_nr, orbital_nr)
+        return self.eval_atom(x, y, z, atom_nr, orbital_nr, atom_frame=atom_frame)
 
     def atom_info(self):
         """
