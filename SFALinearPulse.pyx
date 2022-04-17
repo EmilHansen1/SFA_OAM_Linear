@@ -128,7 +128,7 @@ cdef class SFALinearPulse:
         """
         Give a warning if wrong target is selected
         """
-        target_list = ['hyd1s_analytic', 'GTO', 'asymp', 'asymp_martiny', 'GTO_MO_SPA']
+        target_list = ['hyd1s_analytic', 'GTO', 'GTO_dress', 'asymp', 'asymp_martiny', 'GTO_MO_SPA']
         if not self.target == 'None' and self.target not in target_list:
             print('Warning: The chosen target is not known! Will calculate with prefractor set to 1.')
 
@@ -527,6 +527,7 @@ cdef class SFALinearPulse:
             print('Too high n: not implemented')
             return 0.0
 
+
     cpdef double complex di_gto(self, double p, double theta, double phi, dbl_or_cmplx ts,
                                 double front_factor, double alpha, int i, int j, int k,
                                 double xa, double ya, double za):
@@ -546,6 +547,7 @@ cdef class SFALinearPulse:
                                                                                         pz / (2. * sqrt_re(alpha))))
         return front_factor * result
 
+
     cpdef double complex d_gto(self, double p, double theta, double phi, dbl_or_cmplx ts, coefficients):
         """ Total GTO prefactor from GAMESS coefficients """
         cdef double complex result = 0.
@@ -557,12 +559,46 @@ cdef class SFALinearPulse:
             result += self.di_gto(p, theta, phi, ts, front_factor, alpha, i, j, k, x_a, y_a, z_a)
         return result
 
+
+    cpdef double complex di_gto_dress(self, double p, double theta, double phi, dbl_or_cmplx ts,
+                                      double front_factor, double alpha, int i, int j, int k,
+                                      double xa, double ya, double za):
+        """ Dressed bound state prefactor d(p,t)=<p+A|H|0> in the LG using LCAO and GTOs from GAMESS coefficients """
+        cdef double px = p * sin_re(theta) * cos_re(phi)
+        cdef double py = p * sin_re(theta) * sin_re(phi)
+        cdef double complex pz = p * cos_re(theta) + self.Af(ts)
+
+        cdef double complex result = 2. ** (-(i + j + k) - 3. / 2) * alpha ** (-(i + j + k) / 2. - 3. / 2) \
+                                     * np.exp(-1j * (px * xa + py * ya + p * cos_re(theta) * za)) \
+                                     * np.exp(-(px ** 2 + py ** 2 + pz ** 2) / (4. * alpha)) \
+                                     * np.exp(-1.j * np.pi * (i + j + k) / 2.) * self.Ef(ts) \
+                                     * self.hermite_poly(i, px / (2. * sqrt_re(alpha))) \
+                                     * self.hermite_poly(j, py / (2. * sqrt_re(alpha))) \
+                                     * (-1.j / (2. * sqrt_re(alpha)) * self.hermite_poly(k + 1,
+                                                                                         pz / (2. * sqrt_re(alpha))))
+        return front_factor * result
+
+
+    cpdef double complex d_gto_dress(self, double p, double theta, double phi, dbl_or_cmplx ts, coefficients):
+        """ Total dressed GTO prefactor from GAMESS coefficients """
+        cdef double complex result = 0.
+        cdef double x_a, y_a, z_a, alpha, front_factor
+        cdef int i, j, k
+
+        for row in coefficients:
+            front_factor, alpha, i, j, k, x_a, y_a, z_a = row
+            result += self.di_gto_dress(p, theta, phi, ts, front_factor, alpha, i, j, k, x_a, y_a, z_a)
+        return result
+
+
     cpdef double complex d0(self, double p, double theta, double phi, double complex ts, state_array=None):
         """
         Function to select the right prefactor based on self.target 
         """
         if self.target == "GTO":
             return self.d_gto(p, theta, phi, ts, state_array)
+        elif self.target == 'GTO_dress':
+            return self.d_gto_dress(p, theta, phi, ts, state_array)
         elif self.target == 'asymp':
             return self.d_asymp_Er(p, theta, phi, ts, state_array)
         elif self.target == 'asymp_martiny':
@@ -611,6 +647,7 @@ cdef class SFALinearPulse:
                 MSum += d0 * det * expS
         return MSum
 
+
     # Transition amplitude in cartesian co-ordinates
     cpdef double complex Mxy(s, px, py, pz, tf = np.inf, state_array=None):
         cdef double p = sqrt_re(px * px + py * py + pz * pz)
@@ -618,14 +655,17 @@ cdef class SFALinearPulse:
         cdef double phi = atan2_re(py, px)
         return s.M(p, theta, phi, tf, state_array)
 
+
     # List comprehension over cartesian transition amplitude
     @cython.boundscheck(False)  # turn off bounds-checking for entire function
     @cython.wraparound(False)  # turn off negative index wrapping for entire function
     def Mxy_List(s, pxList, pyList, double pz, tf = np.inf, state_array=None):
         return np.array([s.Mxy(px, py, pz, tf, state_array) for px, py in zip(pxList, pyList)])
 
+
     def Mxz_List(s, pxList, double py, pzList, state_array=None, tf = np.inf):
         return np.array([s.Mxy(px, py, pz, tf, state_array) for px, pz in zip(pxList, pzList)])
+
 
     #### Code for exact integration of the prefactor! ####
     cpdef double complex d0_analytic_hyd1s(self, double p, double theta, double phi, double t):
@@ -634,6 +674,7 @@ cdef class SFALinearPulse:
         ONLY works for numerical calculations, as divergent in saddle points! 
         """
         return 1. / (sqrt_re(2.) * np.pi) / self.DS(p, theta, phi, t)
+
 
     cpdef double complex asymp_transform(self, double p, double theta, double phi, double t, clm_array):
         """
@@ -668,6 +709,7 @@ cdef class SFALinearPulse:
 
         return res * factor1
 
+
     cpdef double complex d0_asymp_martiny(self, double p, double theta, double phi, double t, clm_array):
         """
         Numerical version of prefactor from Martiny's thesis, found above
@@ -675,12 +717,15 @@ cdef class SFALinearPulse:
         return self.asymp_transform(p, theta, phi, t, clm_array) \
                * self.DS(p, theta, phi, t) * np.exp(1.j * self.S(p, theta, phi, t))
 
+
     cpdef double complex d0_num(self, double p, double theta, double phi, double t, state_array=None):
         """
         Function to select the right prefactor based on self.target 
         """
         if self.target == "GTO":
             return self.d_gto(p, theta, phi, t, state_array)
+        elif self.target == "GTO_dress":
+            return self.d_gto_dress(p, theta, phi, t, state_array)
         elif self.target == 'asymp_martiny':
             return self.d0_asymp_martiny(p, theta, phi, t, state_array)
         elif self.target == 'hyd1s_analytic':
