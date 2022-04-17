@@ -293,7 +293,11 @@ def extend_to_higher_l(func, clm_array, new_l, r_value, Ip, Z=1):
     return clm_array_extended
 
 
-def get_asymp_fit(func, r_list, n_samp, Ip, orbital_nr=None, Z=1, return_flm=False):
+def get_asymp_fit(func, r_list, n_samp, Ip, orbital_nr=None, Z=1, return_flm=False, threshold=None):
+    """
+    Gets the asymptotic coefficients from a function func(r, theta, phi), matched to the asymptotic WF on the interval
+    r_list.
+    """
     kappa = np.sqrt(2*Ip)
 
     # First get the flm's
@@ -315,14 +319,33 @@ def get_asymp_fit(func, r_list, n_samp, Ip, orbital_nr=None, Z=1, return_flm=Fal
     for l in range(clm_array.shape[1]):
         for m in range(-l, l+1):
             sign = 0 if m >= 0 else 1
-            popt, _ = curve_fit(asymp, r_list, np.real(f_lms[:, sign, l, m]), p0=1)
-            clm_array[sign, l, abs(m)] = popt[0]
+            popt, _ = curve_fit(asymp, r_list, np.real(f_lms[:, sign, l, abs(m)]), p0=1)
+
+            if threshold is None:
+                clm_array[sign, l, abs(m)] = popt[0]
+            else:
+                if abs(popt[0]) > threshold:
+                    clm_array[sign, l, abs(m)] = popt[0]
+                else:
+                    clm_array[sign, l, abs(m)] = 0.
 
     print('Done!')
     if return_flm:
         return clm_array, f_lms
     else:
         return clm_array
+
+
+def laplace_several_r(func, r_list, n_samp, orbital_nr=None):
+    """Gets the Laplace expansion coeffs. for several r values"""
+    f_lms = []
+    for i, r in enumerate(r_list):
+        print(f'\rEvaluating at r={r:.4f} \t Nr. {i + 1}/{len(r_list)}', end='')
+        if orbital_nr is None:
+            f_lms.append(spherical_expansion(lambda theta, phi: func(r, theta, phi), n_samp))
+        else:
+            f_lms.append(spherical_expansion(lambda theta, phi: func(r, theta, phi, orbital_nr), n_samp))
+    return np.array(f_lms)
 
 
 def eval_asymptotic_cart(x, y, z, coeffs, Ip, Z=1):
