@@ -129,7 +129,7 @@ cdef class SFALinearPulse:
         """
         Give a warning if wrong target is selected
         """
-        target_list = ['hyd1s_analytic', 'GTO', 'asymp', 'asymp_martiny']
+        target_list = ['hyd1s_analytic', 'GTO', 'GTO_dress', 'asymp', 'asymp_martiny']
         if not self.target == 'None' and self.target not in target_list:
             print('Warning: The chosen target is not known! Will calculate with prefractor set to 1.')
 
@@ -518,12 +518,55 @@ cdef class SFALinearPulse:
         return result
 
 
+    cpdef double complex d_gto_boundary(self, double p, double theta, double phi, coefficients):
+        """ Function to find the bounds for the GTO prefactor """
+        cdef double complex S_a = self.S(p, theta, phi, 0.)
+        cdef double complex S_b = self.S(p, theta, phi, 2.*self.N*np.pi / self.omega)
+        cdef double complex gto_a = self.d_gto(p, theta, phi, 0., coefficients)
+        cdef double complex gto_b = self.d_gto(p, theta, phi, 2.*self.N*np.pi / self.omega, coefficients)
+        cdef double complex DS_a = self.DS(p, theta, phi, 0.)
+        cdef double complex DS_b = self.DS(p, theta, phi, 2.*self.N*np.pi / self.omega)
+        return -1.j * (gto_b/DS_b * np.exp(1.j*S_b) - gto_a/DS_a * np.exp(1.j*S_a))
+
+
+    cpdef double complex di_gto_dress(self, double p, double theta, double phi, dbl_or_cmplx ts,
+                               double front_factor, double alpha, int i, int j, int k,
+                               double xa, double ya, double za):
+        """ Dressed bound state prefactor d(p,t)=<p+A|H|0> in the LG using LCAO and GTOs from GAMESS coefficients """
+        cdef double px = p*sin_re(theta) * cos_re(phi)
+        cdef double py = p*sin_re(theta) * sin_re(phi)
+        cdef double complex pz = p*cos_re(theta) + self.Af(ts)
+
+        cdef double complex result = 2.**(-(i + j + k) - 3./2) * alpha**(-(i + j + k)/2. - 3./2) \
+                                     * np.exp(-1j*(px*xa + py*ya + p*cos_re(theta)*za)) \
+                                     * np.exp(-(px**2 + py**2 + pz**2)/(4.*alpha)) \
+                                     * np.exp(-1.j*np.pi*(i + j + k)/2.)*self.Ef(ts) \
+                                     * self.hermite_poly(i, px/(2.*sqrt_re(alpha))) \
+                                     * self.hermite_poly(j, py/(2.*sqrt_re(alpha))) \
+                                     * (-1.j/(2.*sqrt_re(alpha))*self.hermite_poly(k + 1, pz/(2.*sqrt_re(alpha))))
+        return front_factor * result
+
+
+    cpdef double complex d_gto_dress(self, double p, double theta, double phi, dbl_or_cmplx ts, coefficients):
+        """ Total dressed GTO prefactor from GAMESS coefficients """
+        cdef double complex result = 0.
+        cdef double x_a, y_a, z_a, alpha, front_factor
+        cdef int i, j, k
+
+        for row in coefficients:
+            front_factor, alpha, i, j, k, x_a, y_a, z_a = row
+            result += self.di_gto_dress(p, theta, phi, ts, front_factor, alpha, i, j, k, x_a, y_a, z_a)
+        return result
+
+
     cpdef double complex d0(self, double p, double theta, double phi, double complex ts, state_array=None):
         """
         Function to select the right prefactor based on self.target 
         """
         if self.target == "GTO":
             return self.d_gto(p, theta, phi, ts, state_array)
+        elif self.target == 'GTO_dress':
+            return self.d_gto_dress(p, theta, phi, ts, state_array)
         elif self.target == 'asymp':
             return self.d_asymp_Er(p, theta, phi, ts, state_array)
         elif self.target == 'asymp_martiny':
@@ -549,6 +592,11 @@ cdef class SFALinearPulse:
                 expS = exp(I1*s.S(p, theta, phi, ts))
                 d0 = s.d0(p, theta, phi, ts, state_array)
                 MSum += d0*det*expS
+
+        if s.target == 'GTO':
+            bounds = s.d_gto_boundary(p, theta, phi, state_array)
+            MSum += bounds
+
         return MSum
 
 
@@ -627,6 +675,8 @@ cdef class SFALinearPulse:
         """
         if self.target == "GTO":
             return self.d_gto(p, theta, phi, t, state_array)
+        elif self.target == "GTO_dress":
+            return self.d_gto_dress(p, theta, phi, t, state_array)
         elif self.target == 'asymp_martiny':
             return self.d0_asymp_martiny(p, theta, phi, t, state_array)
         elif self.target == 'hyd1s_analytic':
