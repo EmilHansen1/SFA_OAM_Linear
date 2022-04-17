@@ -7,6 +7,7 @@ from scipy.special import lpmv as assoc_legendre
 from . import OutputInterface
 from scipy.signal import find_peaks
 import scipy.special as sp
+from scipy.optimize import curve_fit
 # %%
 
 
@@ -94,7 +95,7 @@ def get_asymp_from_sph_coeff(GTO_sph_coeff, r, Ip, Z=1):
     return flm_list
 
 
-def get_as_coeffs(func, r, n_samp, Ip, Z=1, abs_thresh = 1e-3, normalized=False):
+def get_as_coeffs(func, r, n_samp, Ip, Z=1, abs_thresh=1e-6, normalized=False):
     """
     Get the asymptotic coefficients for a given value of r in a.u.
 
@@ -174,24 +175,35 @@ def get_asymptotic_coeffs(func, n_r, n_samp, Ip, Z=1, interval=None, plot=False,
         return clm_lst
 
 
-def convert_list_to_clm_array(coeff_list):
+def convert_list_to_clm_array(coeff_list, fill_to=None):
     """
     Converts a flat array of Clm coeffs into the form of the Clm array used in this script: array[sign, l, abs(m)],
     with sign = 1 means -m and sign = 1 is +m. Note that the list must have the correct number of entries to match a
-    l value.
+    l value. The fill_to parameter enables filling up to a given l with dummy variable -1 when past given values.
     """
-    max_l = np.sqrt(len(coeff_list)) - 1
+    if fill_to is None:  # Here we match the array size to the given coeff_list
+        max_l = np.sqrt(len(coeff_list)) - 1
+    else:  # Here we calculate for a fixed size array
+        max_l = int(fill_to) - 1
+
     if max_l % 1 != 0:
         print('Invalid length of list!')
         return None
 
-    clm_array = np.zeros((2, int(max_l)+1, int(max_l)+1))
+    if type(coeff_list[0]) == np.complex128 or type(coeff_list[0]) == complex:
+        clm_array = np.zeros((2, int(max_l) + 1, int(max_l) + 1), dtype=complex)
+    else:
+        clm_array = np.zeros((2, int(max_l) + 1, int(max_l) + 1))
     counter = 0
 
     for l in range(int(max_l + 1)):
         for m in range(-l, l+1):
             sign = 0 if m >= 0 else 1
-            clm_array[sign, l, abs(m)] = coeff_list[counter]
+
+            if counter <= len(coeff_list)-1:  # Use the value given
+                clm_array[sign, l, abs(m)] = coeff_list[counter]
+            else:  # Place dummy variable -1
+                clm_array[sign, l, abs(m)] = -1
             counter += 1
 
     return clm_array
@@ -225,6 +237,90 @@ def get_as_from_r_array(func, r_array, n_samp, Ip, Z=1, normalized=False):
         print('\n')
     if normalized:
         return clm_array / np.sum(np.abs(clm_array) ** 2)
+    else:
+        return clm_array
+
+
+def convert_clm_array_to_list(clm_array):
+    """
+    Converts an array of the clm_array shape to a list (sorted by l and then m)
+    """
+    max_l = clm_array.shape[1]
+    clm_list = []
+
+    for l in range(max_l):
+        for m in range(-l, l+1):
+            sign = 0 if m >= 0 else 1
+            clm_list.append(clm_array[sign, l, abs(m)])
+
+    return clm_list
+
+
+def replace_dummy_variables(func, clm_array, r_value, Ip, Z=1):
+    """
+    Replace the dummy values ((-1) from convert_list_to_clm_array) in the clm_array with values matched in r
+    """
+    max_l = clm_array.shape[1]
+    res_array = np.zeros_like(clm_array, dtype=complex)
+    flm_lst = spherical_expansion(lambda theta, phi: func(r_value, theta, phi), max_l*2, plot_coeff=False)
+    kappa = np.sqrt(2 * abs(Ip))
+
+    radial = r_value ** (Z / kappa - 1) * np.exp(-kappa * r_value)
+    for l in range(max_l):
+        for m in range(-l, l + 1):
+            sign = 0 if m >= 0 else 1
+            clm = clm_array[sign, l, abs(m)]
+
+            if clm != -1:
+                res_array[sign, l, abs(m)] = clm
+            else:
+                res_array[sign, l, abs(m)] = flm_lst[sign, l, abs(m)] / radial
+
+    return res_array
+
+
+def extend_to_higher_l(func, clm_array, new_l, r_value, Ip, Z=1):
+    """
+    Extends the clm_array by matching the new coefficients at the given r value
+    """
+    if new_l <= clm_array.shape[1] - 1:
+        print('The new l value is less or equal to the original! Returning original array...')
+        return clm_array
+
+    clm_list = convert_clm_array_to_list(clm_array)
+    array_extended = convert_list_to_clm_array(clm_list, fill_to=new_l)
+    clm_array_extended = replace_dummy_variables(func, array_extended, r_value, Ip, Z)
+    return clm_array_extended
+
+
+def get_asymp_fit(func, r_list, n_samp, Ip, orbital_nr=None, Z=1, return_flm=False):
+    kappa = np.sqrt(2*Ip)
+
+    # First get the flm's
+    f_lms = []
+    for i, r in enumerate(r_list):
+        print(f'\rEvaluating at r={r:.4f} \t Nr. {i + 1}/{len(r_list)}', end='')
+        if orbital_nr is None:
+            f_lms.append(spherical_expansion(lambda theta, phi: func(r, theta, phi), n_samp))
+        else:
+            f_lms.append(spherical_expansion(lambda theta, phi: func(r, theta, phi, orbital_nr), n_samp))
+    f_lms = np.array(f_lms)
+    print('')  # Just to break the line
+
+    # Then do the fitting to find the asymptotic coefficients
+    asymp = lambda r, clm : clm * r**(Z/kappa - 1) * np.exp(-kappa*r)
+    clm_array = np.zeros_like(f_lms[0], dtype=complex)
+
+    print('Now fitting!')
+    for l in range(clm_array.shape[1]):
+        for m in range(-l, l+1):
+            sign = 0 if m >= 0 else 1
+            popt, _ = curve_fit(asymp, r_list, np.real(f_lms[:, sign, l, m]), p0=1)
+            clm_array[sign, l, abs(m)] = popt[0]
+
+    print('Done!')
+    if return_flm:
+        return clm_array, f_lms
     else:
         return clm_array
 
