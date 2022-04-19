@@ -293,7 +293,7 @@ def extend_to_higher_l(func, clm_array, new_l, r_value, Ip, Z=1):
     return clm_array_extended
 
 
-def get_asymp_fit(func, r_list, n_samp, Ip, orbital_nr=None, Z=1, return_flm=False, threshold=None):
+def get_asymp_fit(func, r_list, n_samp, Ip, orbital_nr=None, Z=1, return_flm=False, threshold=None, normalized=False):
     """
     Gets the asymptotic coefficients from a function func(r, theta, phi), matched to the asymptotic WF on the interval
     r_list.
@@ -330,6 +330,8 @@ def get_asymp_fit(func, r_list, n_samp, Ip, orbital_nr=None, Z=1, return_flm=Fal
                     clm_array[sign, l, abs(m)] = 0.
 
     print('Done!')
+    if normalized:
+        clm_array /= np.sum(np.abs(clm_array)**2)
     if return_flm:
         return clm_array, f_lms
     else:
