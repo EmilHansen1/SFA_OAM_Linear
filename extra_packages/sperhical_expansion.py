@@ -312,20 +312,29 @@ def get_asymp_fit(func, r_list, n_samp, Ip, orbital_nr=None, Z=1, return_flm=Fal
     print('')  # Just to break the line
 
     # Then do the fitting to find the asymptotic coefficients
-    asymp = lambda r, clm : clm * r**(Z/kappa - 1) * np.exp(-kappa*r)
+    def asymp_ting(r, clm_real, clm_imag):
+        # This is just a function to split up the real and imaginary parts...
+        r_cal = r[:len(r)//2]
+        res_real = clm_real * r_cal**(Z/kappa - 1) * np.exp(-kappa*r_cal)
+        res_imag = clm_imag * r_cal**(Z/kappa - 1) * np.exp(-kappa*r_cal)
+        return np.hstack([res_real, res_imag])
+
     clm_array = np.zeros_like(f_lms[0], dtype=complex)
 
     print('Now fitting!')
     for l in range(clm_array.shape[1]):
         for m in range(-l, l+1):
             sign = 0 if m >= 0 else 1
-            popt, _ = curve_fit(asymp, r_list, np.real(f_lms[:, sign, l, abs(m)]), p0=1)
+
+            flm_real = np.real(f_lms[:, sign, l, abs(m)])
+            flm_imag = np.imag(f_lms[:, sign, l, abs(m)])
+            popt, _ = curve_fit(asymp_ting, np.hstack([r_list, r_list]), np.hstack([flm_real, flm_imag]), p0=[1, 1])
 
             if threshold is None:
-                clm_array[sign, l, abs(m)] = popt[0]
+                clm_array[sign, l, abs(m)] = popt[0] + 1j*popt[1]
             else:
-                if abs(popt[0]) > threshold:
-                    clm_array[sign, l, abs(m)] = popt[0]
+                if abs(popt[0] + 1j*popt[1]) > threshold:
+                    clm_array[sign, l, abs(m)] = popt[0] + 1j*popt[1]
                 else:
                     clm_array[sign, l, abs(m)] = 0.
 
