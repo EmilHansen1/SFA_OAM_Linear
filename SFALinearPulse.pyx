@@ -130,7 +130,8 @@ cdef class SFALinearPulse:
         """
         Give a warning if wrong target is selected
         """
-        target_list = ['hyd1s_analytic', 'GTO', 'GTO_dress', 'asymp', 'asymp_martiny', 'GTO_MO_SPA']
+        target_list = ['hyd1s_analytic', 'GTO', 'GTO_dress', 'asymp', 'asymp_martiny', 'GTO_MO_SPA',
+                       'dipole', 'dress_dip']
         if not self.target == 'None' and self.target not in target_list:
             print('Warning: The chosen target is not known! Will calculate with prefractor set to 1.')
 
@@ -333,7 +334,7 @@ cdef class SFALinearPulse:
             sol = root(self.mo_spe_real, np.array([ts.real, ts.imag]), args=(p, theta, phi, Rz))
             times.append(complex(*sol.x))
             if not sol.success:
-                print('FATAL ERROR! THE APOCALYPSE IS UPON US!')
+                print('Root finder failed to converge!')
         return np.array(times, dtype=complex)
 
     cpdef double complex DDEf(self, double complex t):
@@ -587,6 +588,118 @@ cdef class SFALinearPulse:
             result += self.di_gto_dress(p, theta, phi, ts, front_factor, alpha, i, j, k, x_a, y_a, z_a)
         return result
 
+    cdef double complex legendre_poly(self, int l, int m, double complex x):
+        if abs(m) > l:
+            return 0.0
+        cdef double complex pref = gamma(l + m + 1)/gamma(l - m + 1) * (1.0 - x*x)**(m/2.0) / (2.0**m * gamma(m + 1))
+        return pref * sp.hyp2f1(m - l, m + l + 1, m + 1, (1.0 - x) / 2.0)
+
+
+    cdef sphericalY(self, int l, int m, double complex cos_theta, double phi):
+        cdef double complex pref = sqrt_re((2.0 * l + 1.0) / 2.0 * gamma(l - m) / gamma(l + m))
+        return pref * self.legendre_poly(l, m, cos_theta) * exp(-1j * m * phi)
+
+    cdef double complex radial_int(self, double p, double theta, double phi, int l, int m, double complex ts):
+        if abs(m) > l:
+            return 0.0
+
+        cdef double nu = 1.0/self.kappa
+        return 1.0j**(nu - 1.0) * p**l * gamma((l + nu)/2.0) / (self.kappa**(l + 3.0*nu + 2.0) * (l + nu)) \
+               * (-2.0j*self.DDS(p, theta, phi, ts))**((nu - 1.0)/2) / self.DDS(p, theta, phi, ts)**(nu - 1.0)
+        #return 1.0j**(nu - 1.0)/4.0 * self.kappa**(nu - l - 2.0) * gamma((nu - 1.0)/2.0) * p**l \
+        #       * (2.0j*self.DDS(p, theta, phi, ts))**((nu - 1.0)/2.0) / (self.DDS(p, theta, phi, ts))**(nu - 1.0)
+
+    cpdef double complex di_dip(self, double p, double theta, double phi, double complex ts,
+                               double complex c_lm, int l, int m):
+        """ Asymptotic dipole interaction prefactor """
+        cdef double complex result = 0.0 + 0.0j
+        cdef double px = p * sin_re(theta) * cos_re(phi)
+        cdef double py = p * sin_re(theta) * sin_re(phi)
+        cdef double pz = p * cos_re(theta)
+        cdef double sn = 1. if self.Af(ts).imag > 0 else -1.
+        cdef double complex pz_t = 1j * sn * sqrt_re(2 * self.Ip + px ** 2 + py ** 2)  # pz+s.Af(ts) : tilde{pz}
+        cdef double complex p_t = 1j * sqrt_re(2 * self.Ip)  # sqrt(px**2+py**2+pz_2**2) : modulus{tilde{p}}
+        cdef double cos_theta_t = np.imag(pz_t) / np.imag(p_t)  # pz_t and p_t are both imaginary in saddle points
+
+        mu = np.array([-1.6592090E-01, 5.5949848E-01, -1.1915733E-01])
+        alpha = np.array([[3.5776779E+01, -4.5957440E-02, -6.8949239E+00],
+                          [-4.5957440E-02, 2.5523784E+01, 8.2148174E-01],
+                          [-6.8949239E+00, 8.2148174E-01, 4.4949015E+01]])
+
+        cdef double complex mu_norm = np.sqrt(mu[0]**2 + mu[1]**2 + (mu[2] + np.sum(alpha[:,2])*self.Ef(ts))**2)
+
+        cdef double complex x_term_1 = -1.0j**(l + 1.0) * (-0.5) \
+                                       * sqrt_re((l + m + 1.0)*(l + m + 2.0)/((2.0*l + 1.0)*(2.0*l + 3.0))) \
+                                       * self.sph_harm(m + 1, l + 1, cos_theta_t, phi) \
+                                       * self.radial_int(p, theta, phi, l + 1, m + 1, ts)
+
+        cdef double complex x_term_2 = -1.0j**(l - 1.0) * 0.5 \
+                                       * sqrt_re((l - m)*(l - m - 1.0)/((2.0*l - 1.0)*(2.0*l + 1.0))) \
+                                       * self.sph_harm(m + 1, l - 1, cos_theta_t, phi) \
+                                       * self.radial_int(p, theta, phi, l - 1, m + 1, ts)
+
+        cdef double complex x_term_3 = -1.0j**(l + 1.0) * 0.5 \
+                                       * sqrt_re((l - m + 1.0)*(l - m + 2.0)/((2.0*l + 1.0)*(2.0*l + 3.0))) \
+                                       * self.sph_harm(m - 1, l + 1, cos_theta_t, phi) \
+                                       * self.radial_int(p, theta, phi, l + 1, m - 1, ts)
+
+        cdef double complex x_term_4 = -1.0j**(l - 1.0) * (-0.5) \
+                                       * sqrt_re((l + m)*(l + m - 1)/((2.0*l + 1.0)*(2.0*l - 1.0))) \
+                                       * self.sph_harm(m - 1, l - 1, cos_theta_t, phi) \
+                                       * self.radial_int(p, theta, phi, l - 1, m - 1, ts)
+
+        cdef double complex y_term_1 = -1.0j**(l + 1.0) * (-1.0/2.0j) \
+                                       * sqrt_re((l + m + 1.0)*(l + m + 2.0)/((2.0*l + 1)*(2.0*l + 3.0))) \
+                                       * self.sph_harm(m + 1, l + 1, cos_theta_t, phi) \
+                                       * self.radial_int(p, theta, phi, l + 1, m + 1, ts)
+        cdef double complex y_term_2 = -1.0j**(l - 1.0) * 1.0/2.0j \
+                                       * sqrt_re((l - m)*(l - m - 1.0)/((2.0*l - 1.0)*(2.0*l + 1.0))) \
+                                       * self.sph_harm(m + 1, l - 1, cos_theta_t, phi) \
+                                       * self.radial_int(p, theta, phi, l - 1, m + 1, ts)
+
+        cdef double complex y_term_3 = -1.0j**(l + 1) * (-1.0/2.0j) \
+                                       * sqrt_re((l - m + 1.0)*(l - m + 2.0)/((2.0*l + 1.0)*(2.0*l + 3.0))) \
+                                       * self.sph_harm(m - 1, l + 1, cos_theta_t, phi) \
+                                       * self.radial_int(p, theta, phi, l + 1, m - 1, ts)
+
+        cdef double complex y_term_4 = -1.0j**(l - 1.0) * 1.0/2.0j \
+                                       * sqrt_re((l + m)*(l + m - 1.0)/((2.0*l - 1.0)*(2.0*l + 1.0))) \
+                                       * self.sph_harm(m - 1, l - 1, cos_theta_t, phi) \
+                                       * self.radial_int(p, theta, phi, l - 1, m - 1, ts)
+
+        cdef double complex z_term_1 = -1.0j**(l + 1.0) \
+                                       * sqrt_re((l - m + 1.0)*(l + m + 1.0)/((2.0*l + 1.0)*(2.0*l + 3.0))) \
+                                       * self.sph_harm(m, l + 1, cos_theta_t, phi) \
+                                       * self.radial_int(p, theta, phi, l + 1, m, ts)
+
+        cdef double complex z_term_2 = -1.0j**(l - 1.0) \
+                                       * sqrt_re((l - m)*(l + m)/((2.0*l - 1.0)*(2.0*l + 1.0))) \
+                                       * self.sph_harm(m, l - 1, cos_theta_t, phi) \
+                                       * self.radial_int(p, theta, phi, l - 1, m, ts)
+
+        result += -sqrt_re(np.pi/2.0) * c_lm * mu_norm * (x_term_1 + x_term_2 + x_term_3 + x_term_4 + y_term_1
+                                                          + y_term_2 + y_term_3 + y_term_4 + z_term_1 + z_term_2)
+        terms = [x_term_1, x_term_2, x_term_3, x_term_4, y_term_1, y_term_2, y_term_3, y_term_4, z_term_1, z_term_2]
+        for i, term in enumerate(terms):
+            if np.isnan(term):
+                print(f'Term {i} is NaN: {term}')
+        return result
+
+    cpdef double complex d_dip(self, double p, double theta, double phi, double complex ts, coeffs):
+        cdef double complex result = 0.0 + 0.0j
+        cdef l_max = coeffs.shape[1]
+        cdef double complex clm
+        cdef int sgn
+        for l in range(0, l_max):
+            for m in range(-l, l + 1):
+                sgn = 0 if m >= 0 else 1
+                clm = coeffs[sgn, l, abs(m)]
+                if abs(clm) == 0:
+                    continue
+                result += self.di_dip(p, theta, phi, ts, clm, l, m)
+        if np.isnan(result) or np.isinf(result):
+            print(f'Result is {np.inf if np.isinf(result) else np.nan}')
+        return result
 
     cpdef double complex d0(self, double p, double theta, double phi, double complex ts, state_array=None):
         """
@@ -600,6 +713,10 @@ cdef class SFALinearPulse:
             return self.d_asymp_Er(p, theta, phi, ts, state_array)
         elif self.target == 'asymp_martiny':
             return self.d_asymp_martiny(p, theta, phi, ts, state_array)
+        elif self.target == 'dipole':
+            return self.d_dip(p, theta, phi, ts, state_array)
+        elif self.target == 'dress_dip':
+            return self.d_gto_dress(p, theta, phi, ts, state_array[0]) + self.d_dip(p, theta, phi, ts, state_array[1])
         else:
             return 1.
 
@@ -622,8 +739,6 @@ cdef class SFALinearPulse:
         cdef double complex pz = p * cos_re(theta)
 
         if s.target == 'GTO_MO_SPA':
-            #print('Im doing the rea shit!')
-            #d = 0. + 0.j
             for row in state_array:
                 front_factor, alpha, i, j, k, x_a, y_a, z_a = row
                 times = s.mo_times_gen(p, theta, phi, z_a)
