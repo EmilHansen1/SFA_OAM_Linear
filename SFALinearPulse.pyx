@@ -41,6 +41,8 @@ from libc.math cimport tgamma as gamma
 
 #from libc.math cimport  cyl_bessel_j as bessel_j_re
 
+cdef extern from "sph_harm.h":
+    double complex sph_harm(double complex x, double complex y, double complex z, double complex r, int l, int m)
 
 #fused types
 ctypedef fused dbl_or_cmplx:
@@ -362,24 +364,16 @@ cdef class SFALinearPulse:
         return -(p * cos_re(theta) + s.Af(t)) * s.Ef(t)
 
     #### PREFACTORS and support functions ####
-    cpdef double complex sph_harm(self, int m, int l, double cos_theta, double phi):
+    cpdef double complex sph_harm_OAM(self, double complex x, double complex y, double complex z,
+                                      double complex p, int l, int m, double phi):
         """
-        Special case of af 'spherical harmonic' where the Legendre function takes arguments abs(x) > 1. 
-        If OAM is given, 
+        Spherical harmonic function in Cartesian coordinates that also allows for OAM selection
         """
-        cdef double factor = np.sqrt(
-            (2. * l + 1.) / (4. * np.pi) * np.math.factorial(l - abs(m)) / np.math.factorial(l + abs(m)))
-        cdef double complex spherical_harm
+        if self.OAM == 1000:  # No OAM selection - return the whole thing!
+            return sph_harm(x, y, z, p, l, m)
+        else:  # OAM selection - we must kill the exponential from the spherical harmonic
+            return sph_harm(x, y, z, p, l, m) / np.exp(1j * m * phi)
 
-        if self.OAM == 1000:  # This is just the normal case - return the full spherical harmonic
-            spherical_harm = factor * sp.lpmn(abs(m), l, cos_theta)[0][abs(m)][l] * np.exp(1j * abs(m) * phi)
-        else:  # Here we have OAM selection - this kills the exponential!
-            spherical_harm = factor * sp.lpmn(abs(m), l, cos_theta)[0][abs(m)][l]
-
-        if m >= 0:
-            return spherical_harm
-        else:
-            return (-1) ** abs(m) * np.conj(spherical_harm)
 
     cpdef double I2_factor(self, int l):
         """
@@ -396,6 +390,7 @@ cdef class SFALinearPulse:
         cdef double hyper_geo = gamma(c) * gamma(c - a - b) / (gamma(c - a) * gamma(c - b))
 
         return hyper_geo * factor
+
 
     cpdef double complex d_asymp_Er(self, double p, double theta, double phi, double complex ts, clm_array):
         """
@@ -460,6 +455,7 @@ cdef class SFALinearPulse:
         else:  # OAM selection is activated - remember the i**OAM!
             return d_res * 1j ** self.OAM
 
+
     cpdef double complex d_asymp_martiny(self, double p, double theta, double phi, double complex ts, clm_array):
         """
         This is the prefactor calculated in Martiny's phd (eq. 4.29), simplified using an identity for the 
@@ -481,12 +477,12 @@ cdef class SFALinearPulse:
         sn = 1. if self.Af(ts).imag > 0 else -1.
         pz_t = 1j * sn * sqrt_re(2 * self.Ip + px ** 2 + py ** 2)  # pz+s.Af(ts) : tilde{pz}
         p_t = 1j * sqrt_re(2 * self.Ip)  # sqrt(px**2+py**2+pz_2**2) : modulus{tilde{p}}
-        cos_theta_t = np.imag(pz_t) / np.imag(p_t)  # pz_t and p_t are both imaginary in saddle points
+
+        #cos_theta_t = np.imag(pz_t) / np.imag(p_t)  # pz_t and p_t are both imaginary in saddle points
 
         # Start calculating the prefactor itself! Everything not depending on l,m:
         factor1 = gamma(nu / 2. + 1.) / sqrt_re(2 * np.pi) * (1j * self.kappa) ** nu * (2. / 1j * ddS) ** (
                     nu / 2.) / ddS ** nu
-        # * sqrt(2.*np.pi*1.j/ddS) * np.exp(1.j*self.S(p, theta, phi, ts))
 
         # Everything depending on l,m:
         for l in range(0, max_l):
@@ -503,12 +499,13 @@ cdef class SFALinearPulse:
                     if m != self.OAM:
                         continue
 
-                d_res += factor2 * clm * self.sph_harm(m, l, cos_theta_t, phi)
+                d_res += factor2 * clm * self.sph_harm_OAM(px, py, pz_t, p_t, l, m, phi)
 
         if self.OAM == 1000:  # OAM selection is not activated
             return d_res * factor1 * 1j
         else:  # OAM selection is activated - remember the i**OAM!
             return d_res * factor1 * 1j * 1j ** self.OAM
+
 
     cpdef dbl_or_cmplx hermite_poly(self, int n, dbl_or_cmplx z):
         if n == 0:
@@ -832,3 +829,4 @@ cdef class SFALinearPulse:
         px = pr * sin_re(theta)
 
         return abs(s.M(pr, theta, phi, t)) ** 2 * px * 2 * Pi
+
