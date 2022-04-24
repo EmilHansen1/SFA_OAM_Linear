@@ -130,7 +130,7 @@ cdef class SFALinearPulse:
         """
         Give a warning if wrong target is selected
         """
-        target_list = ['hyd1s_analytic', 'GTO', 'GTO_dress', 'asymp', 'asymp_martiny', 'GTO_MO_SPA',
+        target_list = ['hyd1s_analytic', 'GTO', 'GTO_dress', 'asymp', 'asymp_martiny', 'dipole2', 'GTO_MO_SPA',
                        'dipole', 'dress_dip']
         if not self.target == 'None' and self.target not in target_list:
             print('Warning: The chosen target is not known! Will calculate with prefractor set to 1.')
@@ -508,6 +508,79 @@ cdef class SFALinearPulse:
             return d_res * factor1 * 1j * 1j ** self.OAM
 
 
+    cpdef double complex d_dipole(self, double p, double theta, double phi, double complex ts, alpha_list, clm_array):
+        """
+        Prefactor for dipole matrix term...
+        """
+        cdef double sn, px, py, pz, alpha_p, alpha_m, beta
+        cdef double complex pz_t, p_t, factor1, res_prime
+        cdef double complex d_res = 0.
+
+        # Values needed
+        cdef double complex ddS = self.DDS(p, theta, 0., ts)
+        cdef double nu = self.Z / self.kappa
+        cdef int max_l = clm_array.shape[1]
+        cdef double complex E_field = self.Ef(ts)
+
+        # Find dipole through polarizability
+        cdef double complex mu_x = alpha_list[0] * E_field
+        cdef double complex mu_y = alpha_list[1] * E_field
+        cdef double complex mu_z = alpha_list[2] * E_field
+
+        # Find the coordinates
+        px = p * sin_re(theta) * cos_re(phi)
+        py = p * sin_re(theta) * sin_re(phi)
+        pz = p * cos_re(theta)
+        sn = 1. if self.Af(ts).imag > 0 else -1.
+        pz_t = 1j * sn * sqrt_re(2 * self.Ip + px ** 2 + py ** 2)  # pz+s.Af(ts) : tilde{pz}
+        p_t = 1j * sqrt_re(2 * self.Ip)  # sqrt(px**2+py**2+pz_2**2) : modulus{tilde{p}}
+
+        # Calculate everything not dependend on l and m:
+        factor1 = self.kappa**(nu-2) * 2.**(-3./2.) * 1.j**(nu-1) * gamma((nu-1.)/2.) / np.sqrt(np.pi) \
+                  * (2. / 1j * ddS) ** ((nu - 1.) / 2.) / (ddS ** (nu - 1.))
+                  #* (2. / 1j * ddS) ** ((nu - 0.) / 2.) / (ddS ** (nu - 0.))
+
+
+        # Loops for the rest (l,m and l',m')
+        for l in range(0, max_l):
+            for m in range(-l, l + 1):
+                # Get clm
+                sign = 0 if m >= 0 else 1
+                clm = clm_array[sign, l, abs(m)]
+                if abs(clm) == 0:  # Don't calculate if it's zero anyway...
+                    continue
+
+                # Find l' and m' terms
+                res_prime = 0
+                for li in [-1, 1]:
+                    if li + l < 0:  # These are 0
+                        continue
+                    for mi in [-1, 0, 1]:
+                        if abs(mi + m) > l:  # These are 0
+                            continue
+
+                        alpha_p = 0.  # Reset values
+                        alpha_m = 0.
+                        beta = 0.
+                        if mi == 1:  # Find the alpha+ terms
+                            alpha_p = -1. * (1. if li == 1 else 0.) * np.sqrt((l+m+1.)*(l+m+2.)/((2.*l+1.)*(2.*l+3.))) \
+                                      + (1. if li == -1 else 0.) * np.sqrt((l-m)*(l-m-1.)/((2.*l-1.)*(2.*l-1.)))
+                        elif mi == 0:  # Find the beta term
+                            beta = (1. if li == 1 else 0.) * np.sqrt((l-m+1.)*(l+m+1.)/((2.*l+1.)*(2.*l+3.))) \
+                                   + (1. if li == -1 else 0.) * np.sqrt((l-m)*(l+m)/((2.*l-1.)*(2.*l+1.)))
+                        else:  # Find the alpha- terms
+                            alpha_m = 1. * (1. if li == 1 else 0.) * np.sqrt((l-m+1.)*(l-m+2.)/((2.*l+1.)*(2.*l+3.))) \
+                                      - (1. if li == -1 else 0.) * np.sqrt((l+m)*(l+m-1.)/((2.*l-1.)*(2.*l+1.)))
+
+                        # Now calculate the contribution from the specific l', m'
+                        res_prime += (-1.j)**(l+li) * sph_harm(px, py, pz_t, p_t, l+li, m+mi) * p_t**(l+li) / self.kappa**(l+li) \
+                                    * (mu_x/2.*(alpha_p + alpha_m) + mu_y/(2.*1.j)*(alpha_p - alpha_m) + mu_z*beta)
+
+                d_res += clm * res_prime
+
+        return 1.j * factor1 * d_res
+
+
     cpdef dbl_or_cmplx hermite_poly(self, int n, dbl_or_cmplx z):
         if n == 0:
             return 1.
@@ -701,7 +774,8 @@ cdef class SFALinearPulse:
             print(f'Result is {np.inf if np.isinf(result) else np.nan}')
         return result
 
-    cpdef double complex d0(self, double p, double theta, double phi, double complex ts, state_array=None):
+
+    cpdef double complex d0(self, double p, double theta, double phi, double complex ts, state_array=None, alpha_list=None):
         """
         Function to select the right prefactor based on self.target 
         """
@@ -713,6 +787,8 @@ cdef class SFALinearPulse:
             return self.d_asymp_Er(p, theta, phi, ts, state_array)
         elif self.target == 'asymp_martiny':
             return self.d_asymp_martiny(p, theta, phi, ts, state_array)
+        elif self.target == 'dipole2':
+            return self.d_dipole(p, theta, phi, ts, alpha_list, state_array)
         elif self.target == 'dipole':
             return self.d_dip(p, theta, phi, ts, state_array)
         elif self.target == 'dress_dip':
@@ -724,59 +800,59 @@ cdef class SFALinearPulse:
     @cython.wraparound(False)  # turn off negative index wrapping for entire function
     #@functools.lru_cache(maxsize=cacheSize)
     cpdef double complex M(s, double p, double theta, double phi, double tf = np.inf,
-                           state_array=None):  # double pz, double px, double t, int N, int eLim):
+                           state_array=None, alpha_list=None):  # double pz, double px, double t, int N, int eLim):
         '''
         Final transition amplitude
         Constructed as sum 
         '''
         cdef double complex MSum = 0.
-        cdef double complex d = 0.
-        cdef double x_a, y_a, z_a, alpha, front_factor
-        cdef int i, j, k
-        cdef double complex ts = 0.
-        cdef double px = p * sin_re(theta) * cos_re(phi)
-        cdef double py = p * sin_re(theta) * sin_re(phi)
-        cdef double complex pz = p * cos_re(theta)
+        #cdef double complex d = 0.
+        #cdef double x_a, y_a, z_a, alpha, front_factor
+        #cdef int i, j, k
+        #cdef double complex ts = 0.
+        #cdef double px = p * sin_re(theta) * cos_re(phi)
+        #cdef double py = p * sin_re(theta) * sin_re(phi)
+        #cdef double complex pz = p * cos_re(theta)
 
-        if s.target == 'GTO_MO_SPA':
-            for row in state_array:
-                front_factor, alpha, i, j, k, x_a, y_a, z_a = row
-                times = s.mo_times_gen(p, theta, phi, z_a)
-                for ts in times:
-                    if real(ts) < tf:
-                        d = s.di_gto(p, theta, phi, ts, front_factor, alpha, i, j, k, x_a, y_a, z_a)
-                        det = sqrt(2. * Pi * I1 / s.DDPhi(p, theta, phi, ts, z_a))
-                        exp_phi = np.exp(I1 * s.S(p, theta, phi, ts) - I1 * (px * x_a + py * y_a + (pz + s.Af(ts)) * z_a))
-                        MSum += det * d * exp_phi
-            return MSum
+        #if s.target == 'GTO_MO_SPA':
+        #    for row in state_array:
+        #        front_factor, alpha, i, j, k, x_a, y_a, z_a = row
+        #        times = s.mo_times_gen(p, theta, phi, z_a)
+        #        for ts in times:
+        #            if real(ts) < tf:
+        #                d = s.di_gto(p, theta, phi, ts, front_factor, alpha, i, j, k, x_a, y_a, z_a)
+        #                det = sqrt(2. * Pi * I1 / s.DDPhi(p, theta, phi, ts, z_a))
+        #                exp_phi = np.exp(I1 * s.S(p, theta, phi, ts) - I1 * (px * x_a + py * y_a + (pz + s.Af(ts)) * z_a))
+        #                MSum += det * d * exp_phi
+        #    return MSum
 
         times = s.TimesGen(p, theta, phi)
         for ts in times:
             if (real(ts) < tf):
                 det = sqrt(2. * Pi * I1 / s.DDS(p, theta, phi, ts))
                 expS = exp(I1 * s.S(p, theta, phi, ts))
-                d0 = s.d0(p, theta, phi, ts, state_array)
+                d0 = s.d0(p, theta, phi, ts, state_array, alpha_list)
                 MSum += d0 * det * expS
         return MSum
 
 
     # Transition amplitude in cartesian co-ordinates
-    cpdef double complex Mxy(s, px, py, pz, tf = np.inf, state_array=None):
+    cpdef double complex Mxy(s, px, py, pz, tf = np.inf, state_array=None, alpha_list=None):
         cdef double p = sqrt_re(px * px + py * py + pz * pz)
         cdef double theta = acos_re(pz / p)
         cdef double phi = atan2_re(py, px)
-        return s.M(p, theta, phi, tf, state_array)
+        return s.M(p, theta, phi, tf, state_array, alpha_list)
 
 
     # List comprehension over cartesian transition amplitude
     @cython.boundscheck(False)  # turn off bounds-checking for entire function
     @cython.wraparound(False)  # turn off negative index wrapping for entire function
-    def Mxy_List(s, pxList, pyList, double pz, tf = np.inf, state_array=None):
-        return np.array([s.Mxy(px, py, pz, tf, state_array) for px, py in zip(pxList, pyList)])
+    def Mxy_List(s, pxList, pyList, double pz, tf = np.inf, state_array=None, alpha_list=None):
+        return np.array([s.Mxy(px, py, pz, tf, state_array, alpha_list) for px, py in zip(pxList, pyList)])
 
 
-    def Mxz_List(s, pxList, double py, pzList, state_array=None, tf = np.inf):
-        return np.array([s.Mxy(px, py, pz, tf, state_array) for px, pz in zip(pxList, pzList)])
+    def Mxz_List(s, pxList, double py, pzList, state_array=None, alpha_list=None, tf = np.inf):
+        return np.array([s.Mxy(px, py, pz, tf, state_array, alpha_list) for px, pz in zip(pxList, pzList)])
 
 
     #### Code for exact integration of the prefactor! ####
