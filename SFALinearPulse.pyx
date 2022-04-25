@@ -500,7 +500,7 @@ cdef class SFALinearPulse:
                     if m != self.OAM:
                         continue
 
-                d_res += factor2 * clm * self.sph_harm_OAM(px, py, pz_t, p_t, l, m, phi)
+                d_res += factor2 * clm * self.sph_harm_OAM(px, py, pz_t, p_t, l, m, 0.0)
 
         if self.OAM == 1000:  # OAM selection is not activated
             return d_res * factor1 * 1j
@@ -621,7 +621,7 @@ cdef class SFALinearPulse:
         cdef double complex p_t = 1j * sqrt_re(2 * self.Ip)  # sqrt(px**2+py**2+pz_2**2) : modulus{tilde{p}}
         cdef double cos_theta_t = np.imag(pz_t) / np.imag(p_t)  # pz_t and p_t are both imaginary in saddle points
 
-        mu = np.array([-1.6592090E-01, 5.5949848E-01, -1.1915733E-01])
+        mu = np.array([0.0, 0.0, 0.0]) # np.array([-1.6592090E-01, 5.5949848E-01, -1.1915733E-01])
         alpha = np.array([[3.5776779E+01, -4.5957440E-02, -6.8949239E+00],
                           [-4.5957440E-02, 2.5523784E+01, 8.2148174E-01],
                           [-6.8949239E+00, 8.2148174E-01, 4.4949015E+01]])

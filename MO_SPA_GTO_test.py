@@ -21,7 +21,7 @@ pool = multiprocessing.Pool(processes=cpus)
 
 # %% GET GTO COEFFICIENTS
 
-output = oi.OutputInterface('output_files/CHBrClF.out')
+output = oi.OutputInterface('output_files/R-CHBrClF.out')
 Ip = abs(output.saved_orbitals[output.HOMO][0])
 kappa = np.sqrt(2*Ip)
 omega = 0.057     # Frequency of light
@@ -34,11 +34,11 @@ gto_coeffs = np.array(output.output_GTOs())
 # %% GET ASYMPTOTIC COEFFICIENTS %% #
 
 plot_list = np.linspace(1, 16, 75)
-f_lms = se.laplace_several_r(output.eval_orbital_spherical, plot_list, 8, orbital_nr=output.HOMO)
+f_lms = se.laplace_several_r(output.eval_orbital_spherical, plot_list, 10, orbital_nr=output.HOMO)
 
-r_list = np.linspace(4.5, 8, 50)
-clm_array = se.get_asymp_fit(output.eval_orbital_spherical, r_list, 8, Ip, orbital_nr=output.HOMO,
-                             threshold=1e-4, normalized=False)
+r_list = np.linspace(4.5, 5.5, 50)
+clm_array = se.get_asymp_fit(output.eval_orbital_spherical, r_list, 10, Ip, orbital_nr=output.HOMO,
+                             threshold=1e-4, normalized=True)
 
 all_coeffs = np.array([np.array(gto_coeffs), np.array(clm_array)], dtype='object')
 
@@ -66,10 +66,10 @@ py = 0.
 px_grd, pz_grd = np.meshgrid(px_lst, pz_lst)
 
 # GTO
-sfa_gto = sfa_lin.SFALinearPulse(Ip, Up, omega, N, CEP, 'GTO_MO_SPA')
-M_gto_grd = np.array(pool.starmap(sfa_gto.Mxz_List, zip(px_grd, repeat(py), pz_grd, repeat(gto_coeffs))))
+sfa_gto = sfa_lin.SFALinearPulse(Ip, Up, omega, N, CEP, 'dress_dip')
+M_gto_grd = np.array(pool.starmap(sfa_gto.Mxz_List, zip(px_grd, repeat(py), pz_grd, repeat(all_coeffs))))
 M_gto_sqr = np.abs(np.flip(M_gto_grd, 0))**2
-print('GTO done!')
+print('Done!')
 
 # %%
 
