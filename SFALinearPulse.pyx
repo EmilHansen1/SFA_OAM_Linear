@@ -503,7 +503,7 @@ cdef class SFALinearPulse:
                     if m != self.OAM:
                         continue
 
-                d_res += factor2 * clm * self.sph_harm_OAM(px, py, pz_t, p_t, l, m, 0.0)
+                d_res += factor2 * clm * self.sph_harm_OAM(px, py, pz_t, p_t, l, m, phi)
 
         if self.OAM == 1000:  # OAM selection is not activated
             return d_res * factor1 * 1j
@@ -560,6 +560,10 @@ cdef class SFALinearPulse:
                         if abs(mi + m) > l:  # These are 0
                             continue
 
+                        if self.OAM != 1000:  # Possibility for OAM selection - only calculate m values matching OAM
+                            if m + mi != self.OAM:
+                                continue
+
                         alpha_p = 0.  # Reset values
                         alpha_m = 0.
                         beta = 0.
@@ -574,12 +578,16 @@ cdef class SFALinearPulse:
                                       - (1. if li == -1 else 0.) * np.sqrt((l+m)*(l+m-1.)/((2.*l-1.)*(2.*l+1.)))
 
                         # Now calculate the contribution from the specific l', m'
-                        res_prime += (-1.j)**(l+li) * sph_harm(px, py, pz_t, p_t, l+li, m+mi) * p_t**(l+li) / self.kappa**(l+li) \
+                        res_prime += (-1.j)**(l+li) * self.sph_harm_OAM(px, py, pz_t, p_t, l+li, m+mi, phi) * p_t**(l+li) / self.kappa**(l+li) \
                                     * (mu_x/2.*(alpha_p + alpha_m) + mu_y/(2.*1.j)*(alpha_p - alpha_m) + mu_z*beta)
 
                 d_res += clm * res_prime
 
-        return 1.j * factor1 * d_res
+        if self.OAM == 1000:  # OAM selection is not activated
+            return 1.j * factor1 * d_res
+        else:  # OAM selection is activated - remember the i**OAM!
+            return 1.j * factor1 * d_res * 1j ** self.OAM
+
 
 
     cpdef dbl_or_cmplx hermite_poly(self, int n, dbl_or_cmplx z):
@@ -890,11 +898,11 @@ cdef class SFALinearPulse:
             return self.d_asymp_Er(p, theta, phi, ts, state_array)
         elif self.target == 'asymp_martiny':
             return self.d_asymp_martiny(p, theta, phi, ts, state_array)
-        elif self.target == 'dipole2':
+        elif self.target == 'dipole':
             return self.d_dipole(p, theta, phi, ts, alpha_list, state_array)
         elif self.target == 'cutoff':
             return self.d_test_cutoff(p, theta, phi, ts, state_array, alpha_list)
-        elif self.target == 'dipole':
+        elif self.target == 'dipole2':
             return self.d_dip(p, theta, phi, ts, state_array)
         elif self.target == 'dress_dip':
             return self.d_gto_dress(p, theta, phi, ts, state_array[0]) + self.d_dip(p, theta, phi, ts, state_array[1])
