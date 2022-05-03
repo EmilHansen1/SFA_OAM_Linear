@@ -44,10 +44,11 @@ class BasisFunction:
 class OutputInterface:
     """ Class that loads data of the output files from GAMESS """
 
-    def __init__(self, file_name):
+    def __init__(self, file_name, shift_center=[0.,0.,0.], convert_to_bohr=True):
         self.file_name = file_name
         self.position = {}  # Position of atoms in molecule
         self.elements = {}  # Element corresponding to number
+        self.shift_center = shift_center  # List to shift center of all loaded molecules
 
         # Contains the information from the ATOMIC BASIS SET section
         # Organized as: basis[atom_nr] = [type of orbital, list of exponents, list of contrction coeff.]
@@ -80,12 +81,16 @@ class OutputInterface:
 
                 # Here we obtain the geometry of the molecule!
                 if 'EQUILIBRIUM GEOMETRY LOCATED' in line:
-                    angs_pr_bohr = 0.529177210903  # Å / Bohr_radius
+                    if convert_to_bohr:
+                        angs_pr_bohr = 0.529177210903  # Å / Bohr_radius
+                    else:
+                        angs_pr_bohr = 1.  # Of course not true, but easy way to switch
+
                     for _ in range(4):
                         line = file.readline()
                     atom_nr = 1
                     while line != '\n':
-                        self.position[atom_nr] = [float(num)/angs_pr_bohr for num in line.split()[2:]]  # Convert to atomic units!
+                        self.position[atom_nr] = [(float(num)-self.shift_center[i])/angs_pr_bohr for i,num in enumerate(line.split()[2:])]  # Convert to atomic units!
                         self.elements[atom_nr] = line.split()[0]
                         line = file.readline()
                         atom_nr += 1
@@ -232,7 +237,7 @@ class OutputInterface:
                             line = file.readline()
 
                         # If we detect a line with ---- the MO data is over.
-                        if '---------------' in line:
+                        if '---------------' in line:  # or 'END OF RHF CALCULATION' in
                             print('Did not find target orbital!')
                             break
 
