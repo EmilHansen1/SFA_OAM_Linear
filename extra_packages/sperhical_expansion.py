@@ -8,6 +8,8 @@ from . import OutputInterface
 from scipy.signal import find_peaks
 import scipy.special as sp
 from scipy.optimize import curve_fit
+from sympy.physics.wigner import wigner_d
+
 # %%
 
 
@@ -359,7 +361,7 @@ def laplace_several_r(func, r_list, n_samp, orbital_nr=None):
     return np.array(f_lms)
 
 
-def eval_asymptotic_cart(x, y, z, coeffs, Ip, Z=1):
+def eval_asymptotic_cart(x, y, z, coeffs, Ip, Z=1, normalized=True):
     """
     Evaluates the asymptotic wave function in cartesian coordinates
     """
@@ -377,11 +379,14 @@ def eval_asymptotic_cart(x, y, z, coeffs, Ip, Z=1):
     else:
         radial_part, angular_sum = 0, 0
 
-    radial_part += radial_norm * r**(Z / kappa - 1) * np.exp(-kappa * r)
+    if normalized:
+        radial_part += radial_norm * r**(Z / kappa - 1) * np.exp(-kappa * r)
+    else:
+        radial_part += r ** (Z / kappa - 1) * np.exp(-kappa * r)
     for l in range(l_max):
         for m in range(-l, l + 1):
-            sgn = 1 if m >= 0 else 0  # This should be the other way around?
-            angular_sum += coeffs[sgn, l, m]*sp.sph_harm(m, l, phi, theta)
+            sgn = 0 if m >= 0 else 1  # This should be the other way around?
+            angular_sum += coeffs[sgn, l, abs(m)]*sp.sph_harm(m, l, phi, theta)
 
     return radial_part * angular_sum
 
@@ -441,3 +446,38 @@ def eval_cylindrical(phi, coeff_list):
         res += np.exp(1j * m * phi) * coeff
     return res
 
+
+def get_wigner_mat_index(m, n, J):
+    """
+    Returns indices of the (m', m) wigner D symbol in the Wigner D matrix for angular momentum J
+    """
+    index_list = np.arange(-J, J+1)
+    return int(np.argwhere(m == index_list)), int(np.argwhere(n == index_list))
+
+
+def rotate_clm(alpha, beta, gamma, clm_array):
+    """
+    Find new clm's corresponding to a rotated state
+    """
+    rot_array = np.zeros_like(clm_array, dtype=complex)
+
+    for l in range(clm_array.shape[1]):
+        # First get the Wigner D matrix
+        wigner_d_mat = np.array(wigner_d(l, alpha, beta, gamma), dtype=complex)
+
+        for mp in range(-l, l+1):  # This is m' - the extra index from rotation
+            coeff = 0
+            for m in range(-l, l+1):  # This is the 'original' m
+                # Get the clm
+                sign = 0 if m >= 0 else 1
+                clm = clm_array[sign, l, abs(m)]
+
+                # Get the correct Wigner D symbol
+                wmat_index = get_wigner_mat_index(mp, m, l)
+                coeff += clm * wigner_d_mat[wmat_index[0], wmat_index[1]]
+
+            # Append to the rotated array
+            sign_p = 0 if mp >= 0 else 1
+            rot_array[sign_p, l, abs(mp)] = coeff
+
+    return rot_array
