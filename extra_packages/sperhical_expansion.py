@@ -386,6 +386,8 @@ def eval_asymptotic_cart(x, y, z, coeffs, Ip, Z=1, normalized=True):
     for l in range(l_max):
         for m in range(-l, l + 1):
             sgn = 0 if m >= 0 else 1  # This should be the other way around?
+            if np.abs(coeffs[sgn, l, abs(m)]) == 0.:  # Don't calculate if it's 0 anyway
+                continue
             angular_sum += coeffs[sgn, l, abs(m)]*sp.sph_harm(m, l, phi, theta)
 
     return radial_part * angular_sum
@@ -463,7 +465,7 @@ def rotate_clm(alpha, beta, gamma, clm_array):
 
     for l in range(clm_array.shape[1]):
         # First get the Wigner D matrix
-        wigner_d_mat = np.array(wigner_d(l, alpha, beta, gamma), dtype=complex)
+        wigner_d_mat = np.nan_to_num(np.array(wigner_d(l, alpha, beta, gamma), dtype=complex))  # nan_to_num because sympy is stupid...
 
         for mp in range(-l, l+1):  # This is m' - the extra index from rotation
             coeff = 0
@@ -481,3 +483,30 @@ def rotate_clm(alpha, beta, gamma, clm_array):
             rot_array[sign_p, l, abs(mp)] = coeff
 
     return rot_array
+
+
+def mirror_clm_xy(clm_array):
+    """
+    Mirrors the wavefunction in the xy plane, that is sending z -> -z.
+    This is equal to sending theta -> pi - theta.
+    """
+    mirror_clm = np.zeros_like(clm_array)
+    for l in range(clm_array.shape[1]):
+        for m in range(-l, l + 1):
+            sign = 0 if m >= 0 else 1
+            mirror_clm[sign, l, abs(m)] = (-1) ** (l + m) * clm_array[sign, l, abs(m)]
+    return mirror_clm
+
+
+def mirror_clm_xz(clm_array):
+    """
+    Mirrors the wavefunction in the xz plane, that is sending y -> -y.
+    This is equal to sending phi -> -phi.
+    """
+    mirror_clm = np.zeros_like(clm_array)
+    for l in range(clm_array.shape[1]):
+        for m in range(-l, l + 1):
+            sign = 0 if m >= 0 else 1
+            new_sign = 1 if sign == 0 else 0  # The opposite of sign
+            mirror_clm[new_sign, l, abs(m)] = clm_array[sign, l, abs(m)] * (-1)**m
+    return mirror_clm
