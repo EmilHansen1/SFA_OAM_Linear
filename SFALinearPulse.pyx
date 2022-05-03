@@ -503,7 +503,7 @@ cdef class SFALinearPulse:
                     if m != self.OAM:
                         continue
 
-                d_res += factor2 * clm * self.sph_harm_OAM(px, py, pz_t, p_t, l, m, phi)
+                d_res += factor2 * clm * self.sph_harm_OAM(px, py, pz_t, p_t, l, m, 0.0)
 
         if self.OAM == 1000:  # OAM selection is not activated
             return d_res * factor1 * 1j
@@ -695,7 +695,7 @@ cdef class SFALinearPulse:
         cdef double complex p_t = 1j * sqrt_re(2 * self.Ip)  # sqrt(px**2+py**2+pz_2**2) : modulus{tilde{p}}
         cdef double cos_theta_t = np.imag(pz_t) / np.imag(p_t)  # pz_t and p_t are both imaginary in saddle points
 
-        mu = np.array([-1.6592090E-01, 5.5949848E-01, -1.1915733E-01])
+        mu = np.array([0.0, 0.0, 0.0]) # np.array([-1.6592090E-01, 5.5949848E-01, -1.1915733E-01])
         alpha = np.array([[3.5776779E+01, -4.5957440E-02, -6.8949239E+00],
                           [-4.5957440E-02, 2.5523784E+01, 8.2148174E-01],
                           [-6.8949239E+00, 8.2148174E-01, 4.4949015E+01]])
@@ -1190,13 +1190,13 @@ cdef class SFALinearPulse:
         return np.array([s.Mxy_num(px, py, pz, tf, state_array, alpha_list) for px, pz in zip(pxList, pzList)])
 
     ####   ---   OAM Functions   ---   ####
-    cpdef Ml(s, double p, double theta, int Nphi = 250):
+    cpdef Ml(s, double p, double theta, state_array=None, int Nphi = 250):
         """
         This is the fourier series coeiffint of M to get the OAM distribusion.
         It is computed taking advantage of the FFT
         """
         phiList = np.linspace(-Pi, Pi, Nphi)
-        MphiList = [s.M(p, theta, phi) for phi in phiList]
+        MphiList = [s.M(p, theta, phi, state_array=state_array) for phi in phiList]
         return np.fft.fft(MphiList) / Nphi
 
     @cython.boundscheck(False)  # turn off bounds-checking for entire function
@@ -1204,18 +1204,18 @@ cdef class SFALinearPulse:
     def Ml_List(s, pList, theta, Nphi = 250):
         return np.array([[abs(M) ** 2 for M in s.Ml(p, theta, Nphi)] for p in pList]).T
 
-    cpdef Mlxz(s, px, pz, int Nphi = 250):
+    cpdef Mlxz(s, px, pz, state_array=None, int Nphi = 250):
         """
         convert Ml to cartesian coordinates, note px is the perpendicular coordinate st. px^2 = px^2+py^2
         """
         cdef double p = sqrt_re(px * px + pz * pz)
         cdef double theta = acos_re(pz / p)
-        return s.Ml(p, theta, Nphi)
+        return s.Ml(p, theta, state_array, Nphi)
 
     @cython.boundscheck(False)  # turn off bounds-checking for entire function
     @cython.wraparound(False)  # turn off negative index wrapping for entire function
-    def Mlxz_List(s, pxList, pzList, Nphi = 250):
-        return np.array([[abs(M) ** 2 for M in s.Mlxz(px, pz, Nphi)] for px, pz in zip(pxList, pzList)])
+    def Mlxz_List(s, pxList, pzList, state_array, Nphi = 250):
+        return np.array([[abs(M) ** 2 for M in s.Mlxz(px, pz, state_array, Nphi)] for px, pz in zip(pxList, pzList)])
 
     #####   ---   code for spectra
     cpdef double Spectra(s, double E, double phi = 0., double t = np.inf, double err = 1.0e-4, int limit = 500):
