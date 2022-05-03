@@ -977,13 +977,13 @@ cdef class SFALinearPulse:
         return np.array([s.Mxy_num(px, py, pz, tf, state_array) for px, pz in zip(pxList, pzList)])
 
     ####   ---   OAM Functions   ---   ####
-    cpdef Ml(s, double p, double theta, int Nphi = 250):
+    cpdef Ml(s, double p, double theta, state_array=None, int Nphi = 250):
         """
         This is the fourier series coeiffint of M to get the OAM distribusion.
         It is computed taking advantage of the FFT
         """
         phiList = np.linspace(-Pi, Pi, Nphi)
-        MphiList = [s.M(p, theta, phi) for phi in phiList]
+        MphiList = [s.M(p, theta, phi, state_array=state_array) for phi in phiList]
         return np.fft.fft(MphiList) / Nphi
 
     @cython.boundscheck(False)  # turn off bounds-checking for entire function
@@ -991,18 +991,18 @@ cdef class SFALinearPulse:
     def Ml_List(s, pList, theta, Nphi = 250):
         return np.array([[abs(M) ** 2 for M in s.Ml(p, theta, Nphi)] for p in pList]).T
 
-    cpdef Mlxz(s, px, pz, int Nphi = 250):
+    cpdef Mlxz(s, px, pz, state_array=None, int Nphi = 250):
         """
         convert Ml to cartesian coordinates, note px is the perpendicular coordinate st. px^2 = px^2+py^2
         """
         cdef double p = sqrt_re(px * px + pz * pz)
         cdef double theta = acos_re(pz / p)
-        return s.Ml(p, theta, Nphi)
+        return s.Ml(p, theta, state_array, Nphi)
 
     @cython.boundscheck(False)  # turn off bounds-checking for entire function
     @cython.wraparound(False)  # turn off negative index wrapping for entire function
-    def Mlxz_List(s, pxList, pzList, Nphi = 250):
-        return np.array([[abs(M) ** 2 for M in s.Mlxz(px, pz, Nphi)] for px, pz in zip(pxList, pzList)])
+    def Mlxz_List(s, pxList, pzList, state_array, Nphi = 250):
+        return np.array([[abs(M) ** 2 for M in s.Mlxz(px, pz, state_array, Nphi)] for px, pz in zip(pxList, pzList)])
 
     #####   ---   code for spectra
     cpdef double Spectra(s, double E, double phi = 0., double t = np.inf, double err = 1.0e-4, int limit = 500):
