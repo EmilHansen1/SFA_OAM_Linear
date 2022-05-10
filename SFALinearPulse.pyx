@@ -1106,7 +1106,7 @@ cdef class SFALinearPulse:
     @cython.boundscheck(False)  # turn off bounds-checking for entire function
     @cython.wraparound(False)  # turn off negative index wrapping for entire function
     #@functools.lru_cache(maxsize=cacheSize)
-    cpdef double complex M(s, double p, double theta, double phi, state_array, alpha_list,
+    cpdef double complex M(s, double p, double theta, double phi, state_array, alpha_list=None,
                            double tf = np.inf):  # double pz, double px, double t, int N, int eLim):
         '''
         Final transition amplitude
@@ -1162,7 +1162,7 @@ cdef class SFALinearPulse:
 
 
     # Transition amplitude in cartesian co-ordinates
-    cpdef double complex Mxy(s, px, py, pz, state_array, alpha_list, tf = np.inf):
+    cpdef double complex Mxy(s, px, py, pz, state_array, alpha_list=None, tf = np.inf):
         cdef double p = sqrt_re(px * px + py * py + pz * pz)
         cdef double theta = acos_re(pz / p)
         cdef double phi = atan2_re(py, px)
