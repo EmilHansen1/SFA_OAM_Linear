@@ -510,3 +510,4 @@ def mirror_clm_xz(clm_array):
             new_sign = 1 if sign == 0 else 0  # The opposite of sign
             mirror_clm[new_sign, l, abs(m)] = clm_array[sign, l, abs(m)] * (-1)**m
     return mirror_clm
+

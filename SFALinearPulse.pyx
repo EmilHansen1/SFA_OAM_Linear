@@ -134,7 +134,7 @@ cdef class SFALinearPulse:
         Give a warning if wrong target is selected
         """
         target_list = ['hyd1s_analytic', 'GTO', 'GTO_dress', 'asymp', 'asymp_martiny', 'dipole2', 'GTO_MO_SPA',
-                       'dipole', 'dress_dip', 'cutoff', 'test']
+                       'dipole', 'dress_dip', 'cutoff', 'test', 'single_clm']
         if not self.target == 'None' and self.target not in target_list:
             print('Warning: The chosen target is not known! Will calculate with prefractor set to 1.')
 
@@ -509,6 +509,38 @@ cdef class SFALinearPulse:
             return d_res * factor1 * 1j
         else:  # OAM selection is activated - remember the i**OAM!
             return d_res * factor1 * 1j * 1j ** self.OAM
+
+    cpdef double complex d_asymp_lm(self, double p, double theta, double phi, double complex ts, lm_array):
+        """
+        E*r prefactor for a single l and m, for use in analytical orientation averaging.
+        Equivalent to the Martiny prefactor, but with
+        """
+        l, m = lm_array
+        cdef double sn, theta_t, px, py, pz
+        cdef double complex factor1, factor2, pz_t, p_t
+        cdef double complex d_res = 0.
+
+        # Values needed
+        cdef double complex ddS = self.DDS(p, theta, 0., ts)
+        cdef double nu = self.Z / self.kappa
+
+        # Find the coordinates
+        px = p * sin_re(theta) * cos_re(phi)
+        py = p * sin_re(theta) * sin_re(phi)
+        pz = p * cos_re(theta)
+        sn = 1. if self.Af(ts).imag > 0 else -1.
+        pz_t = 1j * sn * sqrt_re(2 * self.Ip + px ** 2 + py ** 2)  # pz+s.Af(ts) : tilde{pz}
+        p_t = 1j * sqrt_re(2 * self.Ip)  # sqrt(px**2+py**2+pz_2**2) : modulus{tilde{p}}
+
+        # Start calculating the prefactor itself! Everything not depending on l,m:
+        factor1 = gamma(nu / 2. + 1.) / sqrt_re(2 * np.pi) * (1j * self.kappa) ** nu * (2. / 1j * ddS) ** (nu / 2.) \
+                  / ddS ** nu
+
+        factor2 = (p_t / (1.j * self.kappa)) ** l
+
+        d_res += factor2 * self.sph_harm_OAM(px, py, pz_t, p_t, l, m, phi)
+
+        return d_res * factor1 * 1j
 
 
     cpdef double complex d_dipole(self, double p, double theta, double phi, double complex ts, alpha_list, clm_array):
@@ -908,6 +940,8 @@ cdef class SFALinearPulse:
             return self.d_gto_dress(p, theta, phi, ts, state_array[0]) + self.d_dip(p, theta, phi, ts, state_array[1])
         elif self.target == 'test':
             return self.d0_test(p, theta, phi, ts)
+        elif self.target == 'single_clm':
+            return self.d_asymp_lm(p, theta, phi, ts, state_array)
         else:
             return 1.
 
@@ -1226,13 +1260,28 @@ cdef class SFALinearPulse:
         return np.array([[abs(M) ** 2 for M in s.Mlxz(px, pz, state_array, Nphi)] for px, pz in zip(pxList, pzList)])
 
     #####   ---   code for spectra
-    cpdef double Spectra(s, double E, double phi = 0., double t = np.inf, double err = 1.0e-4, int limit = 500):
+
+    cpdef double spec_integrand(self, double phi, double theta, double p, state_array=None, err=1e-4):
+        return abs(self.M(p, theta, phi, state_array=state_array))**2*sin_re(theta)
+
+    cpdef double spec_phi(self, double theta, double p, state_array=None, err=1e-4):
+        return it.quad(self.spec_integrand, 0.0, 2.0*Pi, epsabs=err, epsrel=err, limit=500,
+                      args=(theta, p, state_array, err))[0]
+
+    cpdef double spectra_integrated(self, double E, state_array=None, err=1e-4):
+        p = np.sqrt(2.0*E)
+        return it.quad(self.spec_phi, 0.0, Pi/2.0, epsabs=err, epsrel=err, limit=500,
+                       args=(p, state_array, err))[0]
+
+    cpdef double Spectra(s, double E, state_array=None, double phi = 0., double t = np.inf,
+                         double err = 1.0e-4, int limit = 500):
         """Function for the spectra"""
-        Norm_val, Norm_error = it.quad(s.Spec_Norm, 0, Pi, args=(phi, E, t), epsabs=err, epsrel=err, limit=limit)
+        Norm_val, Norm_error = it.quad(s.Spec_Norm, 0, Pi, args=(phi, E, t, state_array),
+                                       epsabs=err, epsrel=err, limit=limit)
         return Norm_val
 
     #Spectra Norm integrand
-    cpdef double Spec_Norm(s, double theta, double phi, double E, double t = np.inf):
+    cpdef double Spec_Norm(s, double theta, double phi, double E, double t = np.inf, state_array=None):
         """Function to compute the integrand of the theta integral for the 'spectra"""
         #phrased in spherical coordinates
         #cdef double complex M, Mg
@@ -1240,5 +1289,5 @@ cdef class SFALinearPulse:
         pr = sqrt_re(2 * E)
         px = pr * sin_re(theta)
 
-        return abs(s.M(pr, theta, phi, t)) ** 2 * px * 2 * Pi
+        return abs(s.M(pr, theta, phi, t, state_array=state_array)) ** 2 * px * 2 * Pi
 
