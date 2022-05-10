@@ -17,7 +17,7 @@ import mpmath as mp
 import functools
 import multiprocessing
 import scipy.integrate as it
-from scipy.optimize import root
+from scipy.optimize import root, minimize
 from scipy.interpolate import CubicSpline
 
 import numpy as np
@@ -134,7 +134,7 @@ cdef class SFALinearPulse:
         Give a warning if wrong target is selected
         """
         target_list = ['hyd1s_analytic', 'GTO', 'GTO_dress', 'asymp', 'asymp_martiny', 'dipole2', 'GTO_MO_SPA',
-                       'dipole', 'dress_dip', 'cutoff', 'test', 'single_clm']
+                       'dipole', 'dress_dip', 'cutoff', 'test', 'asymp_stark', 'single_clm']
         if not self.target == 'None' and self.target not in target_list:
             print('Warning: The chosen target is not known! Will calculate with prefractor set to 1.')
 
@@ -316,6 +316,87 @@ cdef class SFALinearPulse:
         ts_roots = [s.addIfRealNeg(ts) for ts in ts_roots]
         #sort real parts to easily select specific solutions
         return sorted(ts_roots, key=np.real)
+
+
+    cpdef dbl_or_cmplx EI(self, dbl_or_cmplx t):
+        """
+        Integral of the electric field 
+        """
+        cdef double A0 = 2 * self.rtUp
+        if self.N == 1:
+            return A0 / 4 * (np.cos(2 * self.omega * t + self.CEP) - 2 * np.cos(self.omega * t + self.CEP))
+        else:
+            return A0 / 2 * np.cos(self.omega * t + self.CEP) * (np.cos(self.omega * t / self.N) - 1)
+
+
+    cpdef dbl_or_cmplx EI2(self, dbl_or_cmplx t):
+        """
+        Integral of electric field squared 
+        """
+        cdef A0 = 2 * self.rtUp
+        if self.N == 1:
+            return A0**2 * self.omega * (t * self.omega / 4. - np.sin(self.omega * t) / 4. - np.sin(2. * self.omega * t + 2. * self.CEP)/16. + np.sin(3. * self.omega * t + 2. * self.CEP) / 12. - np.sin(4. * self.omega * t + 2. * self.CEP) / 32.)
+        else:
+            sin1 = np.sin(self.omega * (2. * self.N - 1.) * t/self.N + 2. * self.CEP)
+            return A0**2 * self.omega * (-self.N * np.sin(self.omega*t/self.N) / 4. + self.omega * (3. * self.N**2 + 1.) * t
+                            / (16. * self.N ** 2) + (self.N - 1.) * sin1 / (8. * (2. * self.N - 1.)) + (self.N + 1.) * sin1
+                            / (8. * (2. * self.N + 1.)) + (self.N ** 2 - 1.) * np.sin(2. * self.omega * t/self.N)
+                            / (32. * self.N) - (3. * self.N ** 2 - 1.) * np.sin(2. * self.omega * t + 2. * self.CEP)
+                            / (32. * self.N ** 2) - (self.N ** 2 - 2.*self.N + 1.) * sin1
+                            /(64. * self.N * (self.N - 1.)) - (self.N ** 2 + 2. * self.N + 1.) * sin1 / (64. * self.N * (self.N + 1.)))
+
+
+    cpdef dbl_or_cmplx DEf(self, dbl_or_cmplx t):
+        """
+        Derivative of the electric field 
+        """
+        cdef double A0 = 2*self.rtUp
+        cdef dbl_or_cmplx sin1 = np.sin(self.omega*t/(2*self.N))
+        cdef dbl_or_cmplx cos1 = np.cos(self.omega * t / (2 * self.N))
+        cdef dbl_or_cmplx cos2 = np.cos(self.omega*t + self.CEP)
+        return A0*self.omega**2 * (-cos1**2 * cos2/(2*self.N**2) +
+                                   2*sin1*np.sin(self.omega*t+self.CEP)*cos1/self.N +
+                                   sin1**2*cos2/(2*self.N**2) + sin1**2 * cos2)
+
+
+    cpdef double stark_minimize_action(self, double[:] t_vec, double p, double theta, double phi, pol_list):
+        """
+        The derivative of the stark action in a form ready to minimize. 
+        pol_list = [mu_z, alpha_zz]
+        """
+        cdef double complex t = t_vec[0] + I1 * t_vec[1]
+        return np.abs(self.DS(p, theta, phi, t) + pol_list[0] * self.Ef(t) + 0.5 * (self.Ef(t)) ** 2 * pol_list[1])
+
+
+    cpdef double complex[:] stark_times_gen(self, double p, double theta, double phi, pol_list):
+        """
+        Saddle point times for the stark shifted action.
+        """
+        # First get the normal SP times
+        cdef double complex[:] SP_times = np.array(self.TimesGen(p, theta, phi), dtype=complex)
+        cdef double complex[:] res_list = np.array([], dtype=complex)
+        cdef double max_t = 2*Pi*self.N / self.omega
+
+        for time in SP_times:
+            res = minimize(self.stark_minimize_action, np.array([time.real, time.imag]), args=(p, theta, phi, pol_list), bounds=((0, max_t), (0, max_t)))
+            res_list = np.append(res_list, res.x[0] + 1.j * res.x[1])
+        return np.array(res_list)
+
+
+    cpdef dbl_or_cmplx S_stark(self, double p, double theta, double phi, dbl_or_cmplx ts, pol_list):
+        """
+        Action modified with the Stark shift. 
+        pol_list is the dipole moment and polarizability [mu_z, alpha_zz]
+        """
+        return pol_list[0] * self.EI(ts) + pol_list[1] / 2 * self.EI2(ts) + self.S(p, theta, phi, ts)
+
+
+    cpdef double complex DDS_stark(self, double p, double theta, double phi, double complex ts, pol_list):
+        """
+        Double derivative of action with Stark modification 
+        """
+        return self.DDS(p, theta, phi, ts) + pol_list[0] * self.DEf(ts) + pol_list[1] * self.Ef(ts) * self.DEf(ts)
+
 
     cdef double complex mo_spe(self, double complex t, double p, double theta, double phi, double Rz):
         # px = p * sin_re(theta) * cos_re(phi) # py = p * sin_re(theta) * sin_re(phi) # pz = p * cos_re(theta)
@@ -723,6 +804,7 @@ cdef class SFALinearPulse:
         #return 1.0j**(nu - 1.0)/4.0 * self.kappa**(nu - l - 2.0) * gamma((nu - 1.0)/2.0) * p**l \
         #       * (2.0j*self.DDS(p, theta, phi, ts))**((nu - 1.0)/2.0) / (self.DDS(p, theta, phi, ts))**(nu - 1.0)
 
+
     cpdef double complex di_dip(self, double p, double theta, double phi, double complex ts,
                                double complex c_lm, int l, int m):
         """ Asymptotic dipole interaction prefactor """
@@ -799,6 +881,7 @@ cdef class SFALinearPulse:
                 print(f'Term {i} is NaN: {term}')
         return result
 
+
     cpdef double complex d_dip(self, double p, double theta, double phi, double complex ts, coeffs):
         cdef double complex result = 0.0 + 0.0j
         cdef l_max = coeffs.shape[1]
@@ -831,6 +914,7 @@ cdef class SFALinearPulse:
             int_list = [integral(p, l) for p in p_list]
             self.radial_splines.append(CubicSpline(p_list, int_list))
 
+
     cpdef double complex d_test_cutoff(self, double p, double theta, double phi, double complex t, clm_array, alpha_list):
         """
         Test for the radial cutoff integral 
@@ -842,7 +926,7 @@ cdef class SFALinearPulse:
         # Values needed
         cdef double nu = self.Z / self.kappa
         cdef int max_l = clm_array.shape[1]
-        cdef double complex E_field = self.Ef(t)
+        cdef double complex E_field = 2*np.sqrt(self.Up) #self.Ef(t)
         cdef double complex r_integral
 
         # Find dipole through polarizability
@@ -918,7 +1002,108 @@ cdef class SFALinearPulse:
         return 27. * self.Ef(ts)
 
 
-    cpdef double complex d0(self, double p, double theta, double phi, double complex ts, state_array=None, alpha_list=None):
+    cpdef double complex d_asymp_stark(self, double p, double theta, double phi, double complex ts,
+                                         clm_array, pol_list):
+        """
+        Asymptotic prefactor using Stark shift correction. This is essentialy the prefactor without expanding using 
+        identity for times from the saddle-point.
+        """
+        cdef double sn, theta_t, px, py, pz
+        cdef double complex factor1, factor2, pz_t, p_t
+        cdef double complex d_res = 0.
+
+        # Values needed
+        cdef double nu = self.Z / self.kappa
+        cdef int max_l = clm_array.shape[1]
+
+        # Find the coordinates
+        px = p * sin_re(theta) * cos_re(phi)
+        py = p * sin_re(theta) * sin_re(phi)
+        pz = p * cos_re(theta)
+        #sn = 1. if self.Af(ts).imag > 0. else -1.
+        #pz_t = 1j * sn * sqrt_re(2 * self.Ip + px ** 2 + py ** 2)  # pz+s.Af(ts) : tilde{pz}
+        #p_t = 1j * sqrt_re(2 * self.Ip)  # sqrt(px**2+py**2+pz_2**2) : modulus{tilde{p}}
+        pz_t = pz + self.Af(ts)
+        p_t = (pz_t**2 + px**2 + py**2)**(1./2.)
+
+        # Start calculating the prefactor itself! Everything not depending on l,m:
+        factor1 = 2**(-nu+1.) * self.DS(p, theta, phi, ts)**(-nu) * self.kappa**nu
+
+        #print('factor1 : ', factor1)
+        #print('DS : ', self.DS(p, theta, phi, ts)**(-nu))
+        #print('kappa : ', self.kappa**nu)
+
+        # Everything depending on l,m:
+        for l in range(0, max_l):
+            if np.sum(np.abs(clm_array[0,l,:])) + np.sum(np.abs(clm_array[1,l,:])) == 0:
+                continue  #Skip this row if it's all 0
+
+            factor2 = (p_t / (1.j * self.kappa))**l * 2**(-l-0.5) * gamma(l+nu+2.) / gamma(l+3./2.) \
+                      * sp.hyp2f1(0.5*(l-nu), 0.5*(l-nu+1)/2, l+3./2., -p_t**2/self.kappa**2)
+
+            for m in range(-l, l + 1):
+                # Get clm
+                sign = 0 if m >= 0 else 1
+                clm = clm_array[sign, l, abs(m)]
+
+                if abs(clm) == 0:  # Don't calculate if it's zero anyway...
+                    continue
+                if self.OAM != 1000:  # Possibility for OAM selection - only calculate m values matching OAM
+                    if m != self.OAM:
+                        continue
+
+                d_res += factor2 * clm * self.sph_harm_OAM(px, py, pz_t, p_t, l, m, phi)
+
+        if self.OAM == 1000:  # OAM selection is not activated
+            return d_res * factor1 * 1.j
+        else:  # OAM selection is activated - remember the i**OAM!
+            return d_res * factor1 * 1.j * 1.j ** self.OAM
+
+
+    cpdef double complex asymp_transform(self, double p, double theta, double phi, double t, clm_array):
+        """
+        Fourier transform of the asymptotic wave function 
+        """
+        cdef double px, py, pz, p_t, pz_t
+        cdef double complex factor1, factor2
+        cdef double nu = self.Z / self.kappa
+        cdef double complex res = 0
+
+        # Coordinates
+        px = p * sin_re(theta) * cos_re(phi)
+        py = p * sin_re(theta) * sin_re(phi)
+        pz = p * cos_re(theta)
+        pz_t = pz + self.Af(t)
+        p_t = sqrt_re(px**2. + py**2. + pz_t**2.)
+
+        # Factor without m,l
+        factor1 = self.kappa ** nu * (self.kappa ** 2 + p_t ** 2) ** (-nu - 1.)
+
+        # Factors with m,l
+        for l in range(0, clm_array.shape[1]):
+            if np.sum(np.abs(clm_array[0, l, :])) + np.sum(np.abs(clm_array[1, l, :])) == 0:
+                continue
+
+            factor2 = gamma(l + nu + 2.) / gamma(l + 3. / 2.) * (p_t / self.kappa) ** l \
+                      * sp.hyp2f1(0.5 * (l - nu), 0.5 * (l - nu + 1.), l + 3. / 2.,
+                                  -p_t ** 2 / self.kappa ** 2) * 2 ** (-l - 0.5) * (-1.j) ** l
+
+            for m in range(-l, l + 1):
+                if self.OAM != 1000:  # Possibility for OAM selection - only calculate m values matching OAM
+                    if m != self.OAM:
+                        continue
+
+                sign = 0 if m >= 0 else 1
+                clm = clm_array[sign, l, abs(m)]
+                res += clm * self.sph_harm_OAM(px, py, pz_t, p_t, l, m, phi) * factor2
+
+        if self.OAM == 1000:
+            return res * factor1
+        else:
+            return res * factor1 * 1.j**self.OAM
+
+
+    cpdef double complex d0(self, double p, double theta, double phi, double complex ts, double complex[:,:,:] state_array, double[:] alpha_list):
         """
         Function to select the right prefactor based on self.target 
         """
@@ -938,6 +1123,7 @@ cdef class SFALinearPulse:
             return self.d_dip(p, theta, phi, ts, state_array)
         elif self.target == 'dress_dip':
             return self.d_gto_dress(p, theta, phi, ts, state_array[0]) + self.d_dip(p, theta, phi, ts, state_array[1])
+        elif self.target == 'single_clm':
         elif self.target == 'test':
             return self.d0_test(p, theta, phi, ts)
         elif self.target == 'single_clm':
@@ -949,8 +1135,8 @@ cdef class SFALinearPulse:
     @cython.boundscheck(False)  # turn off bounds-checking for entire function
     @cython.wraparound(False)  # turn off negative index wrapping for entire function
     #@functools.lru_cache(maxsize=cacheSize)
-    cpdef double complex M(s, double p, double theta, double phi, double tf = np.inf,
-                           state_array=None, alpha_list=None):  # double pz, double px, double t, int N, int eLim):
+    cpdef double complex M(s, double p, double theta, double phi, state_array, alpha_list=None,
+                           double tf = np.inf):  # double pz, double px, double t, int N, int eLim):
         '''
         Final transition amplitude
         Constructed as sum 
@@ -976,33 +1162,51 @@ cdef class SFALinearPulse:
         #                MSum += det * d * exp_phi
         #    return MSum
 
-        times = s.TimesGen(p, theta, phi)
-        for ts in times:
-            if (real(ts) < tf):
-                det = sqrt(2. * Pi * I1 / s.DDS(p, theta, phi, ts))
-                expS = exp(I1 * s.S(p, theta, phi, ts))
-                d0 = s.d0(p, theta, phi, ts, state_array, alpha_list)
+        if s.target == 'asymp_stark':
+            times = s.stark_times_gen(p, theta, phi, alpha_list)
+            for ts in times:
+                det = sqrt(2. * Pi * I1 / s.DDS_stark(p, theta, phi, ts, alpha_list))
+                expS = exp(I1 * s.S_stark(p, theta, phi, ts, alpha_list))
+                d0 = s.d_asymp_stark(p, theta, phi, ts, state_array, alpha_list)
+
+                #print(det)
+                #print(expS)
+                #print(d0)
                 MSum += d0 * det * expS
-        return MSum
+
+            # Remember boundary terms!
+            return MSum - s.asymp_transform(p, theta, phi, 0., state_array) \
+                   * (np.exp(1.j * s.S_stark(p, theta, phi, 2. * s.N * np.pi / s.omega, alpha_list)) -
+                      np.exp(1.j * s.S_stark(p, theta, phi, 0., alpha_list)))
+
+        else:  # Normal stuff
+            times = s.TimesGen(p, theta, phi)
+            for ts in times:
+                if (real(ts) < tf):
+                    det = sqrt(2. * Pi * I1 / s.DDS(p, theta, phi, ts))
+                    expS = exp(I1 * s.S(p, theta, phi, ts))
+                    d0 = s.d0(p, theta, phi, ts, state_array, alpha_list)
+                    MSum += d0 * det * expS
+            return MSum
 
 
     # Transition amplitude in cartesian co-ordinates
-    cpdef double complex Mxy(s, px, py, pz, tf = np.inf, state_array=None, alpha_list=None):
+    cpdef double complex Mxy(s, px, py, pz, state_array, alpha_list=None, tf = np.inf):
         cdef double p = sqrt_re(px * px + py * py + pz * pz)
         cdef double theta = acos_re(pz / p)
         cdef double phi = atan2_re(py, px)
-        return s.M(p, theta, phi, tf, state_array, alpha_list)
+        return s.M(p, theta, phi, state_array, alpha_list, tf)
 
 
     # List comprehension over cartesian transition amplitude
     @cython.boundscheck(False)  # turn off bounds-checking for entire function
     @cython.wraparound(False)  # turn off negative index wrapping for entire function
     def Mxy_List(s, pxList, pyList, double pz, tf = np.inf, state_array=None, alpha_list=None):
-        return np.array([s.Mxy(px, py, pz, tf, state_array, alpha_list) for px, py in zip(pxList, pyList)])
+        return np.array([s.Mxy(px, py, pz, state_array, alpha_list, tf) for px, py in zip(pxList, pyList)])
 
 
-    def Mxz_List(s, pxList, double py, pzList, state_array=None, alpha_list=None, tf = np.inf):
-        return np.array([s.Mxy(px, py, pz, tf, state_array, alpha_list) for px, pz in zip(pxList, pzList)])
+    def Mxz_List(s, pxList, double py, pzList, state_array, alpha_list = None, tf = np.inf):
+        return np.array([s.Mxy(px, py, pz, state_array, alpha_list, tf) for px, pz in zip(pxList, pzList)])
 
 
     #### Code for exact integration of the prefactor! ####
@@ -1012,40 +1216,6 @@ cdef class SFALinearPulse:
         ONLY works for numerical calculations, as divergent in saddle points! 
         """
         return 1. / (sqrt_re(2.) * np.pi) / self.DS(p, theta, phi, t)
-
-
-    cpdef double complex asymp_transform(self, double p, double theta, double phi, double t, clm_array):
-        """
-        Fourier transform of the asymptotic wave function 
-        """
-        cdef double px, py, pz, p_t, pz_t
-        cdef double complex factor1, factor2
-        cdef double nu = self.Z / self.kappa
-        cdef double complex res = 0
-
-        # Coordinates
-        px = p * sin_re(theta) * cos_re(phi)
-        py = p * sin_re(theta) * sin_re(phi)
-        pz = p * cos_re(theta)
-        p_t = sqrt_re(px ** 2. + py ** 2. + (pz + self.Af(t)) ** 2.)
-        pz_t = (pz + self.Af(t)) / p_t
-        theta_t = acos_re(pz_t)
-
-        # Factor without m,l
-        factor1 = self.kappa ** nu * (self.kappa ** 2 + p_t ** 2) ** (-nu - 1)
-
-        # Factors with m,l
-        for l in range(0, clm_array.shape[1]):
-            factor2 = gamma(l + nu + 2.) / gamma(l + 3. / 2.) * (p_t / self.kappa) ** l \
-                      * sp.hyp2f1(0.5 * (l - nu), 0.5 * (l - nu + 1.), l + 3. / 2.,
-                                  -p_t ** 2 / self.kappa ** 2) * 2 ** (-l - 0.5) * (-1.j) ** l
-
-            for m in range(-l, l + 1):
-                sign = 0 if m >= 0 else 1
-                clm = clm_array[sign, l, abs(m)]
-                res += clm * sp.sph_harm(m, l, phi, theta_t) * factor2
-
-        return res * factor1
 
 
     cpdef double complex d0_asymp_martiny(self, double p, double theta, double phi, double t, clm_array):
@@ -1071,9 +1241,9 @@ cdef class SFALinearPulse:
         cdef double r_integral
 
         # Find dipole through polarizability
-        cdef double mu_x = alpha_list[0] * E_field
-        cdef double mu_y = alpha_list[1] * E_field
-        cdef double mu_z = alpha_list[2] * E_field
+        cdef double mu_x = alpha_list[0] * 1.#E_field
+        cdef double mu_y = alpha_list[1] * 1.#E_field
+        cdef double mu_z = alpha_list[2] * 1.#E_field
 
         # Find the coordinates
         px = p * sin_re(theta) * cos_re(phi)
@@ -1190,10 +1360,10 @@ cdef class SFALinearPulse:
         #            1j * (s.Ip + 0.5 * p * p))
 
         M_im = it.quad(s.M_integrand, 0., 2 * s.N * Pi / s.omega, args=(p, theta, phi, 1, state_array, alpha_list),
-                       limit=1000, epsrel=1.5e-3)[0]
+                       limit=1000, epsrel=1.e-8)[0]
         M_re = it.quad(s.M_integrand, 0., 2 * s.N * Pi / s.omega, args=(p, theta, phi, 0, state_array, alpha_list),
                        limit=1000,
-                       epsrel=1.5e-3)[0]
+                       epsrel=1.e-8)[0]
 
         #cdef double dt = 0.1
         #cdef double[:] t_list = np.arange(0., 2*s.N*Pi/s.omega, dt)
@@ -1238,7 +1408,7 @@ cdef class SFALinearPulse:
         It is computed taking advantage of the FFT
         """
         phiList = np.linspace(-Pi, Pi, Nphi)
-        MphiList = [s.M(p, theta, phi, state_array=state_array) for phi in phiList]
+        MphiList = [s.M(p, theta, phi, state_array=state_array, alpha_list=np.array([0.])) for phi in phiList]
         return np.fft.fft(MphiList) / Nphi
 
     @cython.boundscheck(False)  # turn off bounds-checking for entire function
@@ -1258,6 +1428,8 @@ cdef class SFALinearPulse:
     @cython.wraparound(False)  # turn off negative index wrapping for entire function
     def Mlxz_List(s, pxList, pzList, state_array, Nphi = 250):
         return np.array([[abs(M) ** 2 for M in s.Mlxz(px, pz, state_array, Nphi)] for px, pz in zip(pxList, pzList)])
+
+
 
     #####   ---   code for spectra
 
