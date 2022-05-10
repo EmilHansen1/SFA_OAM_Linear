@@ -9,6 +9,7 @@ from scipy.signal import find_peaks
 import scipy.special as sp
 from scipy.optimize import curve_fit
 from sympy.physics.wigner import wigner_d
+from sympy.physics.wigner import wigner_d_small
 
 # %%
 
@@ -483,6 +484,52 @@ def rotate_clm(alpha, beta, gamma, clm_array):
             rot_array[sign_p, l, abs(mp)] = coeff
 
     return rot_array
+
+
+def rotate_clm_several_angles(alpha_list, beta_list, gamma_list, clm_array):
+    """
+    Rotates a clm_array into several configurations given by the angles lists. This is faster than calling
+    rotate_clm several times, since we minimize the computation of the Wigner matrix.
+    """
+    # First find the l's where something there is elements
+    clm_rot_list = []
+    l_cal = []
+    for l in range(clm_array.shape[1]):
+        if np.sum(np.abs(clm_array[0, l, :])) + np.sum(np.abs(clm_array[1, l, :])) != 0.:
+            l_cal.append(l)
+
+    # Start the angle loops
+    for beta in beta_list:
+        # Find the Wigner d matrices
+        wigner_mat_list = []
+        for l in l_cal:
+            wigner_mat_list.append(np.nan_to_num(np.array(wigner_d_small(l, beta), dtype=complex)))
+
+        # Now do the rotation of the clm_array
+        for alpha in alpha_list:
+            for gamma in gamma_list:
+                rot_array = np.zeros_like(clm_array, dtype=complex)
+
+                for li, l in enumerate(l_cal):
+                    for mp in range(-l, l + 1):  # This is m' - the extra index from rotation
+                        coeff = 0
+                        for m in range(-l, l + 1):  # This is the 'original' m
+                            # Get the clm
+                            sign = 0 if m >= 0 else 1
+                            clm = clm_array[sign, l, abs(m)]
+
+                            # Get the correct Wigner d symbol and find Wigner D(mp, m)
+                            wmat_index = get_wigner_mat_index(mp, m, l)
+                            coeff += clm * wigner_mat_list[li][wmat_index[0], wmat_index[1]] * np.exp(-1j * (mp*alpha + m*gamma))
+
+                        # Append to the rotated array
+                        sign_p = 0 if mp >= 0 else 1
+                        rot_array[sign_p, l, abs(mp)] = coeff
+
+                # Save the final rotated array
+                clm_rot_list.append(rot_array.copy())
+
+    return clm_rot_list
 
 
 def mirror_clm_xy(clm_array):
