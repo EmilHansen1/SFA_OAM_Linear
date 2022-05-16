@@ -465,8 +465,8 @@ cdef class SFALinearPulse:
         Factor needed to calculate the transition amplitude for an asymptotic WF in the LG 
         """
         cdef double nu = self.Z / self.kappa
-        cdef double factor = self.kappa ** (nu + 3. / 2.) * gamma(l + nu + 3.) / gamma(l + 3. / 2.) * (
-                2. * self.kappa) ** (-l - 1.) * 2. ** (-nu - 2.)
+        cdef double factor = self.kappa ** (nu + 2.) * gamma(l + nu + 3.) / gamma(l + 3./2.) * \
+                             (self.kappa**(l+1.) * 2.**(l+0.5))**(-1) * 2**(-nu-2.)
 
         # Determine the hypergeometric function in the saddle points (z=1 always):
         cdef double a = 0.5 * (l - nu - 1.)
@@ -483,13 +483,14 @@ cdef class SFALinearPulse:
         clm_array is the expansion coeffs. for the asymptotic wave function. 
         """
         cdef double I2_p, I2_m, alpha_p, alpha_m, sn, theta_t, px, py, pz
-        cdef double complex factor1, factor2, pz_t, p_t, I1
+        cdef double complex factor1, factor2, pz_t, p_t
 
         # Values needed
         cdef double complex d_res = 0.
         cdef double complex ddS = self.DDS(p, theta, 0., ts)
-        cdef double nu = self.Z / self.kappa - 2.
+        cdef double nu = self.Z / self.kappa
         cdef int max_l = clm_array.shape[1]
+        cdef double complex E = self.Ef(ts)
 
         # Find the coordinates
         px = p * sin_re(theta) * cos_re(phi)
@@ -499,16 +500,15 @@ cdef class SFALinearPulse:
         sn = 1. if self.Af(ts).imag > 0 else -1.
         pz_t = 1j * sn * sqrt_re(2 * self.Ip + px ** 2 + py ** 2)  # pz+s.Af(ts) #tilde{pz}
         p_t = 1j * sqrt_re(2 * self.Ip)  # sqrt(px**2+py**2+pz_2**2) # =modulus{tilde{p}}
-        cos_theta_t = np.imag(pz_t) / np.imag(p_t)  # pz_t and p_t are both imaginary in saddle points
 
-        # Find terms dependent on ts (through ddS)
-        I1 = 1j ** (nu / 2.) * gamma(nu / 2.) / (2. * gamma(nu)) * (2. * ddS) ** (nu / 2.) * ddS ** (-nu)
+        # Find terms only dependent on ts
+        factor1 = 1.j**(nu/2.+1) * E * self.kappa**nu * gamma(nu/2.+1)/(2*np.sqrt(2*np.pi)) \
+                                     * ddS**(-nu-2.) * (2*ddS)**(nu/2.+1)
 
         # Now loop over the contributions from the Clm's
         for l in range(0, max_l):
             # Find stuff not dependent on m:
-            I2_p = self.I2_factor(l + 1)
-            I2_m = self.I2_factor(l - 1)
+            factor2 = (p_t/(1.j * self.kappa))**l
 
             for m in range(-l, l + 1):
                 # Get clm
@@ -525,20 +525,14 @@ cdef class SFALinearPulse:
                 alpha_p = np.sqrt((l - m + 1) * (l + m + 1) / ((2 * l + 1) * (2 * l + 3)))
                 alpha_m = np.sqrt((l - m) * (l + m) / (2 * l - 1) * (2 * l + 1))
 
-                # Now add the saddle point dependent terms together
-                factor1 = p_t ** (l + 1) * self.sph_harm(m, l + 1, cos_theta_t, phi)
-
-                if not abs(m) == l:  # If alpha_m is zero the recursion has killed the sph_harm (that is l < abs(m))
-                    factor2 = p_t ** (l - 1) * self.sph_harm(m, l - 1, cos_theta_t, phi)
-
-                # Add the l,m contribution to d
-                d_res += clm * I1 * (
-                            (-1j) ** (l + 1) * alpha_p * I2_p * factor1 + (-1j) ** (l - 1) * alpha_m * I2_m * factor2)
+                # Now add to the result
+                d_res += clm * factor2 * (alpha_m * self.sph_harm_OAM(px, py, pz_t, p_t, l-1, m, phi) * self.kappa**2/p_t
+                                          - alpha_p * self.sph_harm_OAM(px, py, pz_t, p_t, l+1, m, phi)*p_t)
 
         if self.OAM == 1000:  # OAM selection is not activated
-            return d_res
+            return d_res * factor1
         else:  # OAM selection is activated - remember the i**OAM!
-            return d_res * 1j ** self.OAM
+            return d_res * 1j ** self.OAM * factor1
 
 
     cpdef double complex d_asymp_martiny(self, double p, double theta, double phi, double complex ts, clm_array):
@@ -1003,7 +997,7 @@ cdef class SFALinearPulse:
 
 
     cpdef double complex d_asymp_stark(self, double p, double theta, double phi, double complex ts,
-                                         clm_array, pol_list):
+                                         clm_array):
         """
         Asymptotic prefactor using Stark shift correction. This is essentialy the prefactor without expanding using 
         identity for times from the saddle-point.
@@ -1027,7 +1021,7 @@ cdef class SFALinearPulse:
         p_t = (pz_t**2 + px**2 + py**2)**(1./2.)
 
         # Start calculating the prefactor itself! Everything not depending on l,m:
-        factor1 = 2**(-nu+1.) * self.DS(p, theta, phi, ts)**(-nu) * self.kappa**nu
+        factor1 = 2.**(-nu-1.) * self.DS(p, theta, phi, ts)**(-nu) * self.kappa**nu
 
         #print('factor1 : ', factor1)
         #print('DS : ', self.DS(p, theta, phi, ts)**(-nu))
@@ -1039,18 +1033,18 @@ cdef class SFALinearPulse:
                 continue  #Skip this row if it's all 0
 
             factor2 = (p_t / (1.j * self.kappa))**l * 2**(-l-0.5) * gamma(l+nu+2.) / gamma(l+3./2.) \
-                      * sp.hyp2f1(0.5*(l-nu), 0.5*(l-nu+1)/2, l+3./2., -p_t**2/self.kappa**2)
+                      * sp.hyp2f1(0.5*(l-nu), 0.5*(l-nu+1.), l+3./2., -p_t**2/self.kappa**2)
 
             for m in range(-l, l + 1):
-                # Get clm
-                sign = 0 if m >= 0 else 1
-                clm = clm_array[sign, l, abs(m)]
-
-                if abs(clm) == 0:  # Don't calculate if it's zero anyway...
-                    continue
                 if self.OAM != 1000:  # Possibility for OAM selection - only calculate m values matching OAM
                     if m != self.OAM:
                         continue
+
+                # Get clm
+                sign = 0 if m >= 0 else 1
+                clm = clm_array[sign, l, abs(m)]
+                if abs(clm) == 0:  # Don't calculate if it's zero anyway...
+                    continue
 
                 d_res += factor2 * clm * self.sph_harm_OAM(px, py, pz_t, p_t, l, m, phi)
 
@@ -1086,7 +1080,7 @@ cdef class SFALinearPulse:
 
             factor2 = gamma(l + nu + 2.) / gamma(l + 3. / 2.) * (p_t / self.kappa) ** l \
                       * sp.hyp2f1(0.5 * (l - nu), 0.5 * (l - nu + 1.), l + 3. / 2.,
-                                  -p_t ** 2 / self.kappa ** 2) * 2 ** (-l - 0.5) * (-1.j) ** l
+                                  -p_t ** 2 / self.kappa ** 2) * 2. ** (-l - 0.5) * (-1.j) ** l
 
             for m in range(-l, l + 1):
                 if self.OAM != 1000:  # Possibility for OAM selection - only calculate m values matching OAM
@@ -1123,7 +1117,6 @@ cdef class SFALinearPulse:
             return self.d_dip(p, theta, phi, ts, state_array)
         elif self.target == 'dress_dip':
             return self.d_gto_dress(p, theta, phi, ts, state_array[0]) + self.d_dip(p, theta, phi, ts, state_array[1])
-        elif self.target == 'single_clm':
         elif self.target == 'test':
             return self.d0_test(p, theta, phi, ts)
         elif self.target == 'single_clm':
@@ -1164,10 +1157,11 @@ cdef class SFALinearPulse:
 
         if s.target == 'asymp_stark':
             times = s.stark_times_gen(p, theta, phi, alpha_list)
+
             for ts in times:
                 det = sqrt(2. * Pi * I1 / s.DDS_stark(p, theta, phi, ts, alpha_list))
                 expS = exp(I1 * s.S_stark(p, theta, phi, ts, alpha_list))
-                d0 = s.d_asymp_stark(p, theta, phi, ts, state_array, alpha_list)
+                d0 = s.d_asymp_stark(p, theta, phi, ts, state_array)
 
                 #print(det)
                 #print(expS)
@@ -1326,6 +1320,8 @@ cdef class SFALinearPulse:
             return self.d_pol_num(p, theta, phi, t, state_array, alpha_list)
         elif self.target == 'hyd1s_analytic':
             return self.d0_analytic_hyd1s(p, theta, phi, t)
+        elif self.target == 'asymp_stark':
+            return self.d_asymp_stark(p, theta, phi, t, state_array)
         elif self.target == 'test':
             return self.d0_test_num(p, theta, phi, t)
         else:
@@ -1338,7 +1334,13 @@ cdef class SFALinearPulse:
         Currently only the exponentiated action.
         """
         cdef double complex prefactor = self.d0_num(p, theta, phi, t, state_array, alpha_list=alpha_list)
-        cdef double complex Mi = np.exp(I1 * self.S(p, theta, phi, t)) * prefactor
+        cdef double complex exp_S
+        if self.target != 'asymp_stark':
+            exp_S = np.exp(I1 * self.S(p, theta, phi, t))  # Normal exp of action
+        else:
+            exp_S = np.exp(I1 * self.S_stark(p, theta, phi, t, alpha_list))  # Modified stark action
+
+        cdef double complex Mi = exp_S * prefactor
 
         if cmplx == 1:
             return np.imag(Mi)
@@ -1387,6 +1389,11 @@ cdef class SFALinearPulse:
                    * (np.exp(1.j * s.S(p, theta, phi, 2. * s.N * np.pi / s.omega)) - np.exp(
                 1.j * s.S(p, theta, phi, 0.)))
 
+        elif s.target == 'asymp_stark':
+            return (M_re + 1.j * M_im) - s.asymp_transform(p, theta, phi, 0., state_array) \
+                   * (np.exp(1.j * s.S_stark(p, theta, phi, 2. * s.N * np.pi / s.omega, alpha_list)) - np.exp(
+                1.j * s.S_stark(p, theta, phi, 0., alpha_list)))
+
         else:
             return M_re + 1j * M_im  #+ bound1 - bound2
             #return M
@@ -1400,6 +1407,7 @@ cdef class SFALinearPulse:
 
     def Mxz_List_num(s, pxList, double py, pzList, state_array=None, alpha_list=None, tf = np.inf):
         return np.array([s.Mxy_num(px, py, pz, tf, state_array, alpha_list) for px, pz in zip(pxList, pzList)])
+
 
     ####   ---   OAM Functions   ---   ####
     cpdef Ml(s, double p, double theta, state_array=None, int Nphi = 250):
@@ -1440,7 +1448,7 @@ cdef class SFALinearPulse:
         return it.quad(self.spec_integrand, 0.0, 2.0*Pi, epsabs=err, epsrel=err, limit=500,
                       args=(theta, p, state_array, err))[0]
 
-    cpdef double spectra_integrated(self, double E, state_array=None, err=1e-4):
+    cpdef double hemisphere_integrated(self, double E, state_array=None, err=1e-4):
         p = np.sqrt(2.0*E)
         return it.quad(self.spec_phi, 0.0, Pi/2.0, epsabs=err, epsrel=err, limit=500,
                        args=(p, state_array, err))[0]
@@ -1461,5 +1469,5 @@ cdef class SFALinearPulse:
         pr = sqrt_re(2 * E)
         px = pr * sin_re(theta)
 
-        return abs(s.M(pr, theta, phi, t, state_array=state_array)) ** 2 * px * 2 * Pi
+        return abs(s.M(pr, theta, phi, state_array=state_array)) ** 2 * px * 2 * Pi
 
