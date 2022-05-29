@@ -7,7 +7,9 @@ constexpr dcmplx I(0., 1.);
 constexpr double Pi = 3.14159265358979323846;
 
 dcmplx sph_harm(dcmplx x, dcmplx y, dcmplx z, dcmplx r, int l, int m){
-if(std::abs(m) > l){return 0.;}
+if(std::abs(m) > l){ return 0.; }
+if(l < 0){ return 0.0; }
+
 
 if(l == 0){
 return 1./(2.*std::sqrt(Pi));

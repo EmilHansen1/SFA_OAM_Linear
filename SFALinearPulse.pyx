@@ -534,6 +534,44 @@ cdef class SFALinearPulse:
         else:  # OAM selection is activated - remember the i**OAM!
             return d_res * 1j ** self.OAM * factor1
 
+    cpdef double complex d_lm(self, double p, double theta, double phi, double complex ts, lm_array):
+        l, m = lm_array
+        cdef double I2_p, I2_m, alpha_p, alpha_m, sn, theta_t, px, py, pz
+        cdef double complex factor1, factor2, pz_t, p_t
+
+        # Values needed
+        cdef double complex d_res = 0.0 + 0.0j
+        cdef double complex ddS = self.DDS(p, theta, 0., ts)
+        cdef double nu = self.Z / self.kappa
+        cdef double complex E = self.Ef(ts)
+
+        # Find the coordinates
+        px = p * sin_re(theta) * cos_re(phi)
+        py = p * sin_re(theta) * sin_re(phi)
+        pz = p * cos_re(theta)
+
+        sn = 1. if self.Af(ts).imag > 0 else -1.
+        pz_t = 1.j * sn * sqrt_re(2. * self.Ip + px ** 2 + py ** 2)  # pz+s.Af(ts) #tilde{pz}
+        p_t = 1.j * sqrt_re(2. * self.Ip)  # sqrt(px**2+py**2+pz_2**2) # =modulus{tilde{p}}
+
+        # Find terms only dependent on ts
+        factor1 = 1.j ** (nu / 2. + 1) * E * self.kappa ** nu * gamma(nu / 2. + 1.) / (2. * np.sqrt(2. * np.pi)) \
+                  * ddS ** (-nu - 2.) * (2. * ddS) ** (nu / 2. + 1.)
+
+        # Now loop over the contributions from the Clm's
+        factor2 = (p_t / (1.j * self.kappa)) ** l
+
+        # Factors from recursion of spherical harmonics:
+        alpha_p = np.sqrt((l - m + 1) * (l + m + 1) / ((2 * l + 1) * (2 * l + 3)))
+        alpha_m = np.sqrt((l - m) * (l + m) / (2 * l - 1) * (2 * l + 1))
+
+        # Now add to the result
+
+        d_res += factor2 * factor1 * (alpha_m * sph_harm(pz, py, pz_t, p_t, l - 1, m) * self.kappa**2 / p_t
+                            - alpha_p * sph_harm(pz, py, pz_t, p_t, l + 1, m))
+
+        return d_res
+
 
     cpdef double complex d_asymp_martiny(self, double p, double theta, double phi, double complex ts, clm_array):
         """
@@ -1097,7 +1135,7 @@ cdef class SFALinearPulse:
             return res * factor1 * 1.j**self.OAM
 
 
-    cpdef double complex d0(self, double p, double theta, double phi, double complex ts, double complex[:,:,:] state_array, double[:] alpha_list):
+    cpdef double complex d0(self, double p, double theta, double phi, double complex ts, state_array, alpha_list = None):
         """
         Function to select the right prefactor based on self.target 
         """
