@@ -522,8 +522,8 @@ cdef class SFALinearPulse:
                         continue
 
                 # Factors from recursion of spherical harmonics:
-                alpha_p = np.sqrt((l - m + 1) * (l + m + 1) / ((2 * l + 1) * (2 * l + 3)))
-                alpha_m = np.sqrt((l - m) * (l + m) / (2 * l - 1) * (2 * l + 1))
+                alpha_p = np.sqrt((l - m + 1.) * (l + m + 1.) / ((2. * l + 1.) * (2. * l + 3.)))
+                alpha_m = np.sqrt((l - m) * (l + m) / ((2. * l - 1.) * (2. * l + 1.)))
 
                 # Now add to the result
                 d_res += clm * factor2 * (alpha_m * self.sph_harm_OAM(px, py, pz_t, p_t, l-1, m, phi) * self.kappa**2/p_t
@@ -958,7 +958,7 @@ cdef class SFALinearPulse:
         # Values needed
         cdef double nu = self.Z / self.kappa
         cdef int max_l = clm_array.shape[1]
-        cdef double complex E_field = 2*np.sqrt(self.Up) #self.Ef(t)
+        cdef double complex E_field = self.Ef(t)  # 2*np.sqrt(self.Up)
         cdef double complex r_integral
 
         # Find dipole through polarizability
@@ -1273,15 +1273,15 @@ cdef class SFALinearPulse:
         cdef double r_integral
 
         # Find dipole through polarizability
-        cdef double mu_x = alpha_list[0] * 1.#E_field
-        cdef double mu_y = alpha_list[1] * 1.#E_field
-        cdef double mu_z = alpha_list[2] * 1.#E_field
+        cdef double mu_x = alpha_list[0] * E_field
+        cdef double mu_y = alpha_list[1] * E_field
+        cdef double mu_z = alpha_list[2] * E_field
 
         # Find the coordinates
         px = p * sin_re(theta) * cos_re(phi)
         py = p * sin_re(theta) * sin_re(phi)
         pz = p * cos_re(theta)
-        pz_t = p + E_field
+        pz_t = pz + E_field
         p_t = np.sqrt(px**2 + py**2 + pz_t**2)
 
 
