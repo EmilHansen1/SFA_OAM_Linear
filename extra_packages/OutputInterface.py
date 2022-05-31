@@ -47,8 +47,10 @@ class OutputInterface:
     def __init__(self, file_name, shift_center=[0.,0.,0.], convert_to_bohr=True):
         self.file_name = file_name
         self.position = {}  # Position of atoms in molecule
-        self.elements = {}  # Element corresponding to number
+        self.position_angs = {}  # Position of atoms in molecule in Å
+        self.elements = {}  # Element corresponding to number and their charge
         self.shift_center = shift_center  # List to shift center of all loaded molecules
+        self.unit = 'Bohr' if convert_to_bohr else 'Å'
 
         # Contains the information from the ATOMIC BASIS SET section
         # Organized as: basis[atom_nr] = [type of orbital, list of exponents, list of contrction coeff.]
@@ -91,7 +93,8 @@ class OutputInterface:
                     atom_nr = 1
                     while line != '\n':
                         self.position[atom_nr] = [(float(num)-self.shift_center[i])/angs_pr_bohr for i,num in enumerate(line.split()[2:])]  # Convert to atomic units!
-                        self.elements[atom_nr] = line.split()[0]
+                        self.position_angs[atom_nr] = [(float(num)-self.shift_center[i]) for i,num in enumerate(line.split()[2:])]
+                        self.elements[atom_nr] = line.split()[:2]
                         line = file.readline()
                         atom_nr += 1
                     break  # We don't want to read more of the file!
@@ -224,6 +227,13 @@ class OutputInterface:
                             # Fix the types
                             for line in raw_data[3:]:
                                 split = line.split()
+
+                                # Test whether or not the columns are fused together... Happens in col 1.
+                                if not split[1].isalpha():
+                                    # We must correct split to include the atom nr separately
+                                    num = ''.join(i for i in split[1] if i.isdigit())
+                                    split.insert(2, num)
+
                                 nr_list.append(int(split[2]))
                                 shell_type.append(split[3])
                                 MO_coeff.append(float(split[target_index]))
@@ -374,6 +384,6 @@ class OutputInterface:
         """
         Print out information about atom nr, name and position
         """
-        print('Number \t Name \t Position (x,y,z) [Bohr]')
+        print(f'Number \t Name \t Position (x,y,z) [{self.unit}]')
         for i in range(len(self.elements)):
-            print(f'{i+1} \t {self.elements[i+1]} \t {self.position[i+1]}')
+            print(f'{i+1} \t {self.elements[i+1][0]} \t {self.position[i+1]}')
