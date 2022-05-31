@@ -134,7 +134,7 @@ cdef class SFALinearPulse:
         Give a warning if wrong target is selected
         """
         target_list = ['hyd1s_analytic', 'GTO', 'GTO_dress', 'asymp', 'asymp_martiny', 'dipole2', 'GTO_MO_SPA',
-                       'dipole', 'dress_dip', 'cutoff', 'test', 'asymp_stark', 'single_clm']
+                       'dipole', 'dress_dip', 'cutoff', 'test', 'asymp_stark', 'single_clm', 'rho']
         if not self.target == 'None' and self.target not in target_list:
             print('Warning: The chosen target is not known! Will calculate with prefractor set to 1.')
 
@@ -655,6 +655,44 @@ cdef class SFALinearPulse:
 
         return d_res * factor1 * 1j
 
+    cpdef double complex d_hyd_nlm(self, double p, double theta, double phi, double complex ts,
+                                        int n, int l, int m):
+        # Values needed
+        cdef double sn, px, py, pz
+        cdef double complex result = 0.0 + 0.0j
+        cdef double complex factor1, factor2, pz_t, p_t
+
+        # Enable OAM-selection
+        if self.OAM != 1000:
+            phi = 0.0
+            if self.OAM != m:
+                return 0.0
+
+        cdef double complex ddS = self.DDS(p, theta, phi, ts)
+
+        # Find the coordinates
+        px = p * sin_re(theta) * cos_re(phi)
+        py = p * sin_re(theta) * sin_re(phi)
+        pz = p * cos_re(theta)
+        sn = 1. if self.Af(ts).imag > 0 else -1.
+        pz_t = 1.0j * sn * sqrt_re(2.0 * self.Ip + px ** 2.0 + py ** 2.0)  # pz+s.Af(ts) : tilde{pz}
+        p_t = 1.0j * sqrt_re(2.0 * self.Ip)  # sqrt(px**2+py**2+pz_2**2) : modulus{tilde{p}}
+        gamma_p = np.sqrt((l - m - 1.0) * (l + m + 1.0) / ((2.0*l + 1.0) * (2.0*l + 3.0)))
+        gamma_m = np.sqrt((l - m) * (l + m) / ((2.0*l - 1.0) * (2.0*l + 1.0)))
+
+        # Start calculating
+        factor1 = self.Ef(ts) * np.sqrt(gamma(n - l) / (np.pi * n * (n + l))) * (p_t / (1.0j * self.kappa))**l \
+                  * (gamma_p * self.sph_harm_OAM(px, py, pz_t, p_t, l + 1, m, phi)
+                     + gamma_m * self.sph_harm_OAM(px, py, pz_t, p_t, l - 1, m, phi))
+        for k in range(n - l):
+            factor2 = (-1.0)**k * gamma(n + l + 1.0) * gamma ((l + k + 3.0) / 2.0) \
+                      / (gamma(n - l - k) * gamma(2.0 * l + k) * gamma(k + 1.0)) \
+                      * 2.0**((3.0 * (k + l)) / 2.0 + 1.0) * self.kappa**(2.0 * (k + l) + 7.0 / 2.0) \
+                      / (-1.0j * ddS)**((k + l + 3.0) / 2.0)
+            result += factor2
+        result *= factor1
+        return result
+
 
     cpdef double complex d_dipole(self, double p, double theta, double phi, double complex ts, alpha_list, clm_array):
         """
@@ -1159,6 +1197,11 @@ cdef class SFALinearPulse:
             return self.d0_test(p, theta, phi, ts)
         elif self.target == 'single_clm':
             return self.d_asymp_lm(p, theta, phi, ts, state_array)
+        elif self.target == 'rho':
+            return 0.5 * (self.d_hyd_nlm(p, theta, phi, ts, 4, 2, 1)
+                          + 1.0j * self.d_hyd_nlm(p, theta, phi, ts, 4, 3, 1)
+                          - self.d_hyd_nlm(p, theta, phi, ts, 4, 2, -1)
+                          + 1.0j * self.d_hyd_nlm(p, theta, phi, ts, 4, 3, -1))
         else:
             return 1.
 
