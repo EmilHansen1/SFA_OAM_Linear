@@ -386,7 +386,7 @@ def eval_asymptotic_cart(x, y, z, coeffs, Ip, Z=1, normalized=True):
         radial_part += r ** (Z / kappa - 1) * np.exp(-kappa * r)
     for l in range(l_max):
         for m in range(-l, l + 1):
-            sgn = 0 if m >= 0 else 1  # This should be the other way around?
+            sgn = 0 if m >= 0 else 1
             if np.abs(coeffs[sgn, l, abs(m)]) == 0.:  # Don't calculate if it's 0 anyway
                 continue
             angular_sum += coeffs[sgn, l, abs(m)]*sp.sph_harm(m, l, phi, theta)
@@ -554,7 +554,7 @@ def mirror_clm_xz(clm_array):
     for l in range(clm_array.shape[1]):
         for m in range(-l, l + 1):
             sign = 0 if m >= 0 else 1
-            new_sign = 1 if sign == 0 else 0  # The opposite of sign
+            new_sign = 1 if sign == 0 and m != 0 else 0  # The opposite of sign, but don't switch m=0
             mirror_clm[new_sign, l, abs(m)] = clm_array[sign, l, abs(m)] * (-1)**m
     return mirror_clm
 
